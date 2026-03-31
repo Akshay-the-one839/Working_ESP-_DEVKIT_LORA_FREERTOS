@@ -1,0 +1,481 @@
+#include <18F25K22.h>
+#device ADC=10
+#INCLUDE <stdlib.h>
+
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN
+#fuses IESO
+#use delay(xtal=20MHz, clock=20MHz)
+#byte clock_source=getenv("clock")
+
+#use rs232(stream=COM_1,baud=9600,parity=N,xmit=PIN_C6,rcv=PIN_C7,bits=8)
+#include "internal_eeprom.c"
+
+#define V1      PIN_B0
+#define V2      PIN_B1
+#define V3      PIN_B2
+#define V4      PIN_B3
+#define V5      PIN_B4
+#define V6      PIN_B5
+#define V7      PIN_B6
+#define V8      PIN_B7
+#define SIGLED  PIN_C3
+
+// ============================================================
+// SET THIS CHIP'S ID
+// Slave A : #define MY_ID  'A'
+// Slave B : #define MY_ID  'B'
+// Slave C : #define MY_ID  'C'
+// ============================================================
+#define MY_ID  'A'
+
+// ============================================================
+// VALVE ON DELAY — non-blocking, counted in Timer1 seconds
+// 2 = 2 seconds after output_high before output_low is allowed
+// ============================================================
+#define VALVE_ON_DELAY_S  2
+
+// --- UART register bits ----------------------------------
+#byte RCSTA = 0xFAB
+#bit  OERR  = RCSTA.1
+#bit  FERR  = RCSTA.2
+#bit  CREN  = RCSTA.4
+
+// --- State variables -------------------------------------
+char state1='0';
+char state2='0';
+char state3='0';
+char state4='0';
+char state5='0';
+char state6='0';
+char state7='0';
+char state8='0';
+
+int1 vanoflg1=0;
+int1 vanoflg2=0;
+int1 vanoflg3=0;
+int1 vanoflg4=0;
+int1 vanoflg5=0;
+int1 vanoflg6=0;
+int1 vanoflg7=0;
+int1 vanoflg8=0;
+
+// --- Per-valve non-blocking countdown timers (seconds) ---
+// When a valve is turned ON, its timer is loaded with
+// VALVE_ON_DELAY_S.  Timer1 ISR decrements them every second.
+// The OFF command is only executed once the timer reaches 0.
+// This replaces ALL delay_ms(2000) calls in the main loop.
+volatile int8 v1_timer=0;
+volatile int8 v2_timer=0;
+volatile int8 v3_timer=0;
+volatile int8 v4_timer=0;
+volatile int8 v5_timer=0;
+volatile int8 v6_timer=0;
+volatile int8 v7_timer=0;
+volatile int8 v8_timer=0;
+
+// --- RX / packet variables -------------------------------
+int1  RX_Command_Ready = 0;
+char  RxBuffer[60];
+char  TimeBuffer[9];
+char  vno1,vno2,vno3,vno4,vno5,vno6,vno7,vno8;
+
+// --- Timer1 / clock variables ----------------------------
+int8  overflow_count = 0;
+int8  sec  = 0;
+int8  min  = 0;
+int8  hr   = 0;
+int8  bwmin    = 0;
+int8  bwminv1  = 0;
+int8  bwminv2  = 0;
+
+unsigned int16 eeprom_base_address = 0;
+
+volatile int1 txflg = 0;
+
+// ============================================================
+//  Timer1 ISR  — fires ~every 50 ms, counts to 1 s
+//  Decrements per-valve timers once per second.
+// ============================================================
+void setup_timer1_for_1s_interrupt() {
+    setup_timer_1(T1_INTERNAL | T1_DIV_BY_8);
+    set_timer1(34286);
+    enable_interrupts(INT_TIMER1);
+}
+
+#INT_TIMER1
+void timer1_isr()
+{
+    overflow_count++;
+    set_timer1(34286);
+
+    if (overflow_count >= 20)          // 20 × 50 ms = 1 second
+    {
+        overflow_count = 0;
+        sec++;
+
+        // -- Decrement per-valve timers ------------------
+        if (v1_timer > 0) v1_timer--;
+        if (v2_timer > 0) v2_timer--;
+        if (v3_timer > 0) v3_timer--;
+        if (v4_timer > 0) v4_timer--;
+        if (v5_timer > 0) v5_timer--;
+        if (v6_timer > 0) v6_timer--;
+        if (v7_timer > 0) v7_timer--;
+        if (v8_timer > 0) v8_timer--;
+
+        // -- Wall-clock ----------------------------------
+        if (sec >= 59)
+        {
+            sec = 0;
+            min++;
+            bwminv1++;  if (bwminv1 >= 11) bwminv1 = 0;
+            bwminv2++;  if (bwminv2 >= 11) bwminv2 = 0;
+
+            write_eeprom(eeprom_base_address + 40, hr);
+            write_eeprom(eeprom_base_address + 41, min);
+
+            if (min >= 59) { min = 0; hr++; }
+            if (hr  >= 24)   hr = 0;
+        }
+    }
+}
+
+// --- EEPROM helpers --------------------------------------
+void store_byte(unsigned int16 address, unsigned char value) {
+    if (address < 256) write_eeprom(address, value);
+}
+unsigned char retrieve_byte(unsigned int16 address) {
+    if (address < 256) return read_eeprom(address);
+    return 0;
+}
+
+// ============================================================
+//  RDA ISR  — collects one packet into RxBuffer.
+//  Filters MY_ID as first byte so other slaves' traffic is
+//  discarded immediately without filling the buffer.
+//  NO delay_ms() here — ISR must return as fast as possible.
+// ============================================================
+#int_RDA
+void RDA_isr(void)
+{
+    // -- Hardware error recovery --------------------------
+    if (OERR) { CREN = 0; CREN = 1; return; }
+    if (FERR) { getc(COM_1); return; }
+
+    char first = getc(COM_1);
+
+    // Discard immediately if not our ID
+    if (first != MY_ID) return;
+
+    // Collect remainder of packet
+    int8 idx = 0;
+    char x;
+
+    while (idx < 55)
+    {
+        x = getc(COM_1);
+        RxBuffer[idx] = x;
+        idx++;
+
+        if (x == '*' && idx > 30)   // end-of-packet marker
+            break;
+    }
+
+    RxBuffer[idx] = '\0';
+    RX_Command_Ready = 1;
+}
+
+// ============================================================
+//  txvalve  — send ACK frame back to master (ESP32 / LoRa)
+//  Format: $A,1,<s1>,2,<s2>,...,8,<s8>,\n
+//  Sent 5 times with 100 ms gap (same as before).
+// ============================================================
+void txvalve()
+{
+    int8 k;
+    for (k = 0; k < 5; k++)
+    {
+        output_high(SIGLED);
+        fprintf(COM_1, "$");
+        fprintf(COM_1, "%c,", MY_ID);
+        fprintf(COM_1, "1,%c,", state1);
+        fprintf(COM_1, "2,%c,", state2);
+        fprintf(COM_1, "3,%c,", state3);
+        fprintf(COM_1, "4,%c,", state4);
+        fprintf(COM_1, "5,%c,", state5);
+        fprintf(COM_1, "6,%c,", state6);
+        fprintf(COM_1, "7,%c,", state7);
+        fprintf(COM_1, "8,%c,", state8);
+        fprintf(COM_1, "\n");
+        delay_ms(100);
+    }
+    output_low(SIGLED);
+    txflg = 0;
+}
+
+// ============================================================
+//  parse_packet  — tokenise RxBuffer into vnoN / stateN
+// ============================================================
+void parse_packet(void)
+{
+    char *ptr;
+    int   index = 0;
+    char  sep[] = "*";
+
+    ptr = strtok(RxBuffer, sep);
+
+    while (ptr != NULL)
+    {
+        switch (index)
+        {
+            case  0: vno1   = ptr[0]; break;
+            case  1: state1 = ptr[0]; break;
+            case  2: vno2   = ptr[0]; break;
+            case  3: state2 = ptr[0]; break;
+            case  4: vno3   = ptr[0]; break;
+            case  5: state3 = ptr[0]; break;
+            case  6: vno4   = ptr[0]; break;
+            case  7: state4 = ptr[0]; break;
+            case  8: vno5   = ptr[0]; break;
+            case  9: state5 = ptr[0]; break;
+            case 10: vno6   = ptr[0]; break;
+            case 11: state6 = ptr[0]; break;
+            case 12: vno7   = ptr[0]; break;
+            case 13: state7 = ptr[0]; break;
+            case 14: vno8   = ptr[0]; break;
+            case 15: state8 = ptr[0]; break;
+            case 16: strcpy(TimeBuffer, ptr); break;
+        }
+        ptr = strtok(NULL, sep);
+        index++;
+    }
+
+    printf("\r\n=== Parsed Packet ===\r\n");
+    printf("SlaveID: %c\r\n", MY_ID);
+    printf("Time   : %s\r\n", TimeBuffer);
+    printf("V1:%c S:%c  V2:%c S:%c  V3:%c S:%c  V4:%c S:%c\r\n",
+           vno1,state1, vno2,state2, vno3,state3, vno4,state4);
+    printf("V5:%c S:%c  V6:%c S:%c  V7:%c S:%c  V8:%c S:%c\r\n",
+           vno5,state5, vno6,state6, vno7,state7, vno8,state8);
+    printf("=====================\r\n");
+}
+
+// Valve control is handled inline in main() below.
+// Each valve follows the same pattern:
+//   ON  ? output_high + start vN_timer  (no delay_ms)
+//   OFF ? only if vN_timer == 0         (non-blocking guard)
+
+// ============================================================
+//  main
+// ============================================================
+void main()
+{
+    output_b(0x00);
+    set_tris_a(0xFF);
+    SET_TRIS_b(0xCF);
+    SET_TRIS_c(0xB8);
+
+    setup_timer1_for_1s_interrupt();
+
+    enable_interrupts(INT_RDA);
+    enable_interrupts(GLOBAL);
+
+    output_low(V1); output_low(V2);
+    output_low(V3); output_low(V4);
+    output_low(V5); output_low(V6);
+    output_low(V7); output_low(V8);
+    output_low(SIGLED);
+
+    while (true)
+    {
+        // --------------------------------------------------
+        //  Process incoming LoRa packet
+        // --------------------------------------------------
+        if (RX_Command_Ready == 1)
+        {
+            RX_Command_Ready = 0;
+            parse_packet();
+
+            // -- VALVE 1 --------------------------------
+            if (vno1 == '1')
+            {
+                if (state1 == '1' && vanoflg1 == 0)
+                {
+                    output_high(V1);
+                    vanoflg1  = 1;
+                    v1_timer  = VALVE_ON_DELAY_S;  // start countdown — NO delay_ms
+                }
+                if (state1 == '0' && vanoflg1 == 1 && v1_timer == 0)
+                {
+                    output_low(V1);
+                    vanoflg1 = 0;
+                }
+            }
+
+            // -- VALVE 2 --------------------------------
+            if (vno2 == '2')
+            {
+                if (state2 == '1' && vanoflg2 == 0)
+                {
+                    output_high(V2);
+                    vanoflg2  = 1;
+                    v2_timer  = VALVE_ON_DELAY_S;
+                }
+                if (state2 == '0' && vanoflg2 == 1 && v2_timer == 0)
+                {
+                    output_low(V2);
+                    vanoflg2 = 0;
+                }
+            }
+
+            // -- VALVE 3 --------------------------------
+            if (vno3 == '3')
+            {
+                if (state3 == '1' && vanoflg3 == 0)
+                {
+                    output_high(V3);
+                    vanoflg3  = 1;
+                    v3_timer  = VALVE_ON_DELAY_S;
+                }
+                if (state3 == '0' && vanoflg3 == 1 && v3_timer == 0)
+                {
+                    output_low(V3);
+                    vanoflg3 = 0;
+                }
+            }
+
+            // -- VALVE 4 --------------------------------
+            if (vno4 == '4')
+            {
+                if (state4 == '1' && vanoflg4 == 0)
+                {
+                    output_high(V4);
+                    vanoflg4  = 1;
+                    v4_timer  = VALVE_ON_DELAY_S;
+                }
+                if (state4 == '0' && vanoflg4 == 1 && v4_timer == 0)
+                {
+                    output_low(V4);
+                    vanoflg4 = 0;
+                }
+            }
+
+            // -- VALVE 5 --------------------------------
+            if (vno5 == '5')
+            {
+                if (state5 == '1' && vanoflg5 == 0)
+                {
+                    output_high(V5);
+                    vanoflg5  = 1;
+                    v5_timer  = VALVE_ON_DELAY_S;
+                }
+                if (state5 == '0' && vanoflg5 == 1 && v5_timer == 0)
+                {
+                    output_low(V5);
+                    vanoflg5 = 0;
+                }
+            }
+
+            // -- VALVE 6 --------------------------------
+            if (vno6 == '6')
+            {
+                if (state6 == '1' && vanoflg6 == 0)
+                {
+                    output_high(V6);
+                    vanoflg6  = 1;
+                    v6_timer  = VALVE_ON_DELAY_S;
+                }
+                if (state6 == '0' && vanoflg6 == 1 && v6_timer == 0)
+                {
+                    output_low(V6);
+                    vanoflg6 = 0;
+                }
+            }
+
+            // -- VALVE 7 --------------------------------
+            if (vno7 == '7')
+            {
+                if (state7 == '1' && vanoflg7 == 0)
+                {
+                    output_high(V7);
+                    vanoflg7  = 1;
+                    v7_timer  = VALVE_ON_DELAY_S;
+                }
+                if (state7 == '0' && vanoflg7 == 1 && v7_timer == 0)
+                {
+                    output_low(V7);
+                    vanoflg7 = 0;
+                }
+            }
+
+            // -- VALVE 8 --------------------------------
+            if (vno8 == '8')
+            {
+                if (state8 == '1' && vanoflg8 == 0)
+                {
+                    output_high(V8);
+                    vanoflg8  = 1;
+                    v8_timer  = VALVE_ON_DELAY_S;
+                }
+                if (state8 == '0' && vanoflg8 == 1 && v8_timer == 0)
+                {
+                    output_low(V8);
+                    vanoflg8 = 0;
+                }
+            }
+
+            // -- Send ACK back to master -----------------
+            // txvalve() uses delay_ms(100) only between the 5
+            // repeated ACK transmissions — that is safe because
+            // it is NOT inside a blocking valve delay.
+            txflg = 1;
+            txvalve();
+
+        } // end RX_Command_Ready
+
+        // --------------------------------------------------
+        //  Pending OFF check — runs every main-loop cycle.
+        //
+        //  If the master sent OFF while the valve timer was
+        //  still counting, the OFF command was ignored above.
+        //  Here we check again: once the timer hits 0, apply
+        //  the OFF that is already stored in stateN.
+        //
+        //  This means even without a new packet the valve
+        //  will turn OFF as soon as the delay expires.
+        // --------------------------------------------------
+        if (vanoflg1 == 1 && v1_timer == 0 && state1 == '0')
+            { output_low(V1);  vanoflg1 = 0; }
+
+        if (vanoflg2 == 1 && v2_timer == 0 && state2 == '0')
+            { output_low(V2);  vanoflg2 = 0; }
+
+        if (vanoflg3 == 1 && v3_timer == 0 && state3 == '0')
+            { output_low(V3);  vanoflg3 = 0; }
+
+        if (vanoflg4 == 1 && v4_timer == 0 && state4 == '0')
+            { output_low(V4);  vanoflg4 = 0; }
+
+        if (vanoflg5 == 1 && v5_timer == 0 && state5 == '0')
+            { output_low(V5);  vanoflg5 = 0; }
+
+        if (vanoflg6 == 1 && v6_timer == 0 && state6 == '0')
+            { output_low(V6);  vanoflg6 = 0; }
+
+        if (vanoflg7 == 1 && v7_timer == 0 && state7 == '0')
+            { output_low(V7);  vanoflg7 = 0; }
+
+        if (vanoflg8 == 1 && v8_timer == 0 && state8 == '0')
+            { output_low(V8);  vanoflg8 = 0; }
+
+        output_low(SIGLED);
+
+        // Small yield delay — keeps main loop from spinning
+        // at full CPU speed, but short enough to react to
+        // new packets within ~10 ms.
+        // Do NOT increase this — it must stay well below the
+        // ACK_WINDOW_MS the ESP32 is waiting for.
+        delay_ms(10);
+
+    } // while(true)
+} // main

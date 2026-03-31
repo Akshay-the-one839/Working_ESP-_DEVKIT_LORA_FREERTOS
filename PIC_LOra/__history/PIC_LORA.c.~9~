@@ -1,0 +1,207 @@
+#include <18F25K22.h>
+#device ADC=10
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN,IESO
+#use delay(xtal=20MHz)
+
+#use rs232(stream=COM_1, baud=9600, parity=N, xmit=PIN_C6, rcv=PIN_C7, bits=8)
+
+#include "internal_eeprom.c"
+
+// ---------------- PIN DEFINITIONS ----------------
+#define V1 PIN_B3 
+#define V2 PIN_B2 
+#define V3 PIN_B0 
+#define V4 PIN_B1 
+#define V5 PIN_B6 
+#define V6 PIN_B5 
+#define V7 PIN_B7 
+#define V8 PIN_B4 
+
+#define SIGLED PIN_C3 
+
+// ---------------- GLOBAL VARIABLES ----------------
+char state1='0'; 
+char state2='0';
+char state3='0';
+char state4='0';
+char state5='0'; 
+char state6='0';
+char state7='0';
+char state8='0';
+
+int1 vanoflg1=0;
+int1 vanoflg2=0;
+int1 vanoflg3=0;
+int1 vanoflg4=0;
+int1 vanoflg5=0;
+int1 vanoflg6=0;
+int1 vanoflg7=0;
+int1 vanoflg8=0;
+
+int1 RX_Command_Ready = 0;     
+char RxBuffer[40];   
+int8 Index = 0;     
+
+int1 txflg=0;
+
+int8 overflow_count = 0;
+int8 sec=0;
+int8 min=0;
+int8 hr=0;
+
+// ---------------- TIMER1 SETUP ----------------
+void setup_timer1_for_1s_interrupt() {
+   setup_timer_1(T1_INTERNAL | T1_DIV_BY_8);
+   set_timer1(34286);
+   enable_interrupts(INT_TIMER1);
+}
+
+#INT_TIMER1
+void timer1_isr() {
+
+   overflow_count++;
+   set_timer1(34286);
+
+   if (overflow_count >= 20) {
+      overflow_count = 0;
+      sec++;
+
+      if(sec >= 60) {
+         sec = 0;
+         min++;
+
+         if(min >= 60) {
+            min = 0;
+            hr++;
+            if(hr >= 24) hr = 0;
+         }
+      }
+   }
+}
+
+// ---------------- UART RECEIVE ----------------
+#int_RDA
+void RDA_isr(void)
+{
+   char temp = getc(COM_1);
+
+   // Print first received character
+   printf("\r\nFirst Char: %c\r\n", temp);
+
+   if (temp == 'A')
+   {       
+      printf("Data: ");
+
+      for(int i=0;i<34;i++)     
+      {
+         RxBuffer[i] = getc(COM_1);
+
+         // Print each received byte
+         printf("%c", RxBuffer[i]);
+      }
+
+      printf("\r\n");   // New line after printing
+      RX_Command_Ready = 1;
+   }
+   else if (temp == 'a')
+   {
+      txflg=1; 
+   }
+}
+// ---------------- TRANSMIT STATUS ----------------
+void txvalve()
+{
+   output_high(SIGLED);
+
+   printf("$A,");
+   printf("1,%c,",state1);
+   printf("2,%c,",state2);
+   printf("3,%c,",state3);
+   printf("4,%c,",state4);
+   printf("5,%c,",state5);
+   printf("6,%c,",state6);
+   printf("7,%c,",state7);
+   printf("8,%c,",state8);
+
+   delay_ms(200);
+
+   output_low(SIGLED);
+   txflg=0;
+}
+
+// ---------------- MAIN ----------------
+void main() {
+
+   output_b(0x00);
+
+   set_tris_a(0xFF);
+   set_tris_b(0xCF);   // RB3 & RB2 output
+   set_tris_c(0xB8);
+
+   setup_timer1_for_1s_interrupt();
+   enable_interrupts(INT_RDA);
+   enable_interrupts(GLOBAL);
+
+   // ----------- DEFAULT: V1 & V2 ON -----------
+   output_high(V1);
+   output_high(V2);
+   state1='1';
+   state2='1';
+   vanoflg1=1;
+   vanoflg2=1;
+
+   while(TRUE)
+   {
+      if(RX_Command_Ready)
+      {
+         RX_Command_Ready=0;
+
+         int i=0;
+
+         // Parse command
+         state1 = RxBuffer[2];
+         state2 = RxBuffer[6];
+         state3 = RxBuffer[10];
+         state4 = RxBuffer[14];
+         state5 = RxBuffer[18];
+         state6 = RxBuffer[22];
+         state7 = RxBuffer[26];
+         state8 = RxBuffer[30];
+
+         // -------- V1 --------
+         if(state1=='1'){ output_high(V1); vanoflg1=1; }
+         else { output_low(V1); vanoflg1=0; }
+
+         // -------- V2 --------
+         if(state2=='1'){ output_high(V2); vanoflg2=1; }
+         else { output_low(V2); vanoflg2=0; }
+
+         // -------- V3 --------
+         if(state3=='1'){ output_high(V3); vanoflg3=1; }
+         else { output_low(V3); vanoflg3=0; }
+
+         // -------- V4 --------
+         if(state4=='1'){ output_high(V4); vanoflg4=1; }
+         else { output_low(V4); vanoflg4=0; }
+
+         // -------- V5 --------
+         if(state5=='1'){ output_high(V5); vanoflg5=1; }
+         else { output_low(V5); vanoflg5=0; }
+
+         // -------- V6 --------
+         if(state6=='1'){ output_high(V6); vanoflg6=1; }
+         else { output_low(V6); vanoflg6=0; }
+
+         // -------- V7 --------
+         if(state7=='1'){ output_high(V7); vanoflg7=1; }
+         else { output_low(V7); vanoflg7=0; }
+
+         // -------- V8 --------
+         if(state8=='1'){ output_high(V8); vanoflg8=1; }
+         else { output_low(V8); vanoflg8=0; }
+      }
+
+      if(txflg)
+         txvalve();
+   }
+}

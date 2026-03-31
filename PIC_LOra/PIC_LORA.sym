@@ -1,0 +1,267 @@
+000     @SCRATCH
+001     @SCRATCH
+001     _RETURN_
+002     @SCRATCH
+003     @SCRATCH
+004     @INTERRUPT_AREA
+005     @INTERRUPT_AREA
+006     @INTERRUPT_AREA
+007     @INTERRUPT_AREA
+008     @INTERRUPT_AREA
+009     @INTERRUPT_AREA
+00A     @INTERRUPT_AREA
+00B     @INTERRUPT_AREA
+00C     @INTERRUPT_AREA
+00D     @INTERRUPT_AREA
+00E     @INTERRUPT_AREA
+00F     @INTERRUPT_AREA
+010     @INTERRUPT_AREA
+011     @INTERRUPT_AREA
+012     @INTERRUPT_AREA
+013     @INTERRUPT_AREA
+014     @INTERRUPT_AREA
+015     @INTERRUPT_AREA
+016-017 strtok.save
+018-01B _Randseed
+01C     state1
+01D     state2
+01E     state3
+01F     state4
+020     state5
+021     state6
+022     state7
+023     state8
+024.0   vanoflg1
+024.1   vanoflg2
+024.2   vanoflg3
+024.3   vanoflg4
+024.4   vanoflg5
+024.5   vanoflg6
+024.6   vanoflg7
+024.7   vanoflg8
+025.0   eeprom_valve_dirty
+025.1   RX_Command_Ready
+025.2   txflg
+026     v1_timer
+027     v2_timer
+028     v3_timer
+029     v4_timer
+02A     v5_timer
+02B     v6_timer
+02C     v7_timer
+02D     v8_timer
+02E-069 RxBuffer
+06A-072 TimeBuffer
+073     vno1
+074     vno2
+075     vno3
+076     vno4
+077     vno5
+078     vno6
+079     vno7
+07A     vno8
+07B     overflow_count
+07C     sec
+07D     min
+07E     hr
+07F     bwminv1
+080     bwminv2
+081-082 eeprom_base_address
+083     txvalve.k
+083     load_valve_states_from_eeprom.magic
+083-084 parse_packet.ptr
+083     MAIN.@SCRATCH1
+084     load_valve_states_from_eeprom.s1
+084     @delay_ms1.P1
+085     load_valve_states_from_eeprom.s2
+085     parse_packet.index
+086-087 parse_packet.sep
+086     load_valve_states_from_eeprom.s3
+087     load_valve_states_from_eeprom.s4
+088     parse_packet.t_vno1
+088     load_valve_states_from_eeprom.s5
+089     load_valve_states_from_eeprom.s6
+089     parse_packet.t_vno2
+08A     parse_packet.t_vno3
+08A     load_valve_states_from_eeprom.s7
+08B     load_valve_states_from_eeprom.s8
+08B     parse_packet.t_vno4
+08C     parse_packet.t_vno5
+08C     @PRINTF_X_9600_31766_31767.P1
+08C     save_valve_states_to_eeprom.@SCRATCH1
+08C     load_valve_states_from_eeprom.@SCRATCH1
+08D     @PRINTF_X_9600_31766_31767.P1
+08D     parse_packet.t_vno6
+08D     load_valve_states_from_eeprom.@SCRATCH2
+08E     parse_packet.t_vno7
+08E     load_valve_states_from_eeprom.@SCRATCH3
+08F     parse_packet.t_vno8
+08F     load_valve_states_from_eeprom.@SCRATCH4
+090     parse_packet.t_s1
+090     load_valve_states_from_eeprom.@SCRATCH5
+091     parse_packet.t_s2
+091     load_valve_states_from_eeprom.@SCRATCH6
+092     parse_packet.t_s3
+092     load_valve_states_from_eeprom.@SCRATCH7
+093     parse_packet.t_s4
+093     load_valve_states_from_eeprom.@SCRATCH8
+094     parse_packet.t_s5
+095     parse_packet.t_s6
+096     parse_packet.t_s7
+097     parse_packet.t_s8
+098-0A0 parse_packet.t_time
+0A1-0A2 strncpy.s1
+0A1     @PSTRINGCN_9600_31766_31767.P1
+0A1-0A2 strtok.s1
+0A1     is_valid_state.c
+0A1     @PRINTF_D_9600_31766_31767.P1
+0A1     @PSTRINGC_9600_31766_31767.@SCRATCH1
+0A1     @PSTRINGR_9600_31766_31767.@SCRATCH1
+0A2     @PRINTF_D_9600_31766_31767.P1
+0A2     @PSTRINGC_9600_31766_31767.@SCRATCH2
+0A2     @PSTRINGCN_9600_31766_31767.@SCRATCH1
+0A2     @PSTRINGR_9600_31766_31767.@SCRATCH2
+0A3-0A4 strncpy.s2
+0A3-0A4 strtok.s2
+0A3     @PSTRINGCN_9600_31766_31767.@SCRATCH2
+0A3     @PRINTF_D_9600_31766_31767.@SCRATCH1
+0A4     @PRINTF_D_9600_31766_31767.@SCRATCH2
+0A5-0A6 strtok.beg
+0A5-0A6 strncpy.n
+0A5     @PRINTF_D_9600_31766_31767.@SCRATCH3
+0A6     @PRINTF_D_9600_31766_31767.@SCRATCH4
+0A7     @DIV88.P1
+0A7-0A8 strncpy.s
+0A7-0A8 strtok.end
+0A8     @DIV88.P1
+0A9-0AA strpbrk.s1
+0A9-0AA strspn.s1
+0A9     strncpy.@SCRATCH1
+0A9     strtok.@SCRATCH1
+0A9     @DIV88.@SCRATCH1
+0AA     strncpy.@SCRATCH2
+0AA     strtok.@SCRATCH2
+0AB-0AC strpbrk.s2
+0AB-0AC strspn.s2
+0AB     strncpy.@SCRATCH3
+0AD-0AE strspn.sc1
+0AD-0AE strpbrk.sc1
+0AF-0B0 strspn.sc2
+0AF-0B0 strpbrk.sc2
+0B1     strpbrk.@SCRATCH1
+0B1     strspn.@SCRATCH1
+0B2     RDA_isr.first
+0B2     timer1_isr.@SCRATCH1
+0B3     RDA_isr.idx
+0B3     timer1_isr.@SCRATCH2
+0B4     RDA_isr.x
+0B5     RDA_isr.@SCRATCH1
+0B6     RDA_isr.@SCRATCH2
+F55     CCP_5
+F55     CCP_5_LOW
+F56     CCP_5_HIGH
+F58     CCP_4
+F58     CCP_4_LOW
+F59     CCP_4_HIGH
+F5E     CCP_3
+F5E     CCP_3_LOW
+F5F     CCP_3_HIGH
+F67     CCP_2
+F67     CCP_2_LOW
+F68     CCP_2_HIGH
+F78.6   C2OUT
+F79.6   C1OUT
+FAB     RCSTA
+FAB.1   OERR
+FAB.2   FERR
+FAB.4   CREN
+FBE     CCP_1_LOW
+FBE     CCP_1
+FBF     CCP_1_HIGH
+FE1-FE2 @WRITE_PACKED_MEMORY.P1
+FE1-FE2 @READ_PACKED_MEMORY.P2
+FE9-FEA @READ_PACKED_MEMORY.P1
+FE9-FEA @WRITE_PROGRAM_MEMORY.P2
+FE9-FEA @WRITE_PACKED_MEMORY.P3
+FE9-FEA @READ_PROGRAM_MEMORY.P4
+FF6-FF8 @WRITE_PROGRAM_MEMORY.P1
+FF6-FF8 @READ_PROGRAM_MEMORY.P2
+
+ROM Allocation:
+0000A2  @const1050.call
+0000D0  @const1052.call
+0000E8  @const1055.call
+000124  @const1069.call
+000152  timer1_isr
+00023E  RDA_isr
+0002B0  @const1116.call
+0002DE  @const1123.call
+000308  @const1124.call
+00032A  @const1125.call
+000352  @const1126.call
+000370  @const1127.call
+00038A  @const1128.call
+000398  @const1129.call
+0003A6  @const1131.call
+0003D8  @const1132.call
+00040A  @const1133.call
+000422  setup_timer1_for_1s_interrupt
+000436  @PSTRINGCN_9600_31766_31767
+000456  @PRINTF_X_9600_31766_31767
+00049A  is_valid_state
+0004B0  @PSTRINGC_9600_31766_31767
+0004D2  save_valve_states_to_eeprom
+000844  load_valve_states_from_eeprom
+000BFE  strspn
+000C86  strpbrk
+000CF8  strtok
+000D9C  strncpy
+000E2C  @DIV88
+000E54  @PRINTF_D_9600_31766_31767
+000F08  @PSTRINGR_9600_31766_31767
+000F30  parse_packet
+0014BC  @goto12243
+001502  @delay_ms1
+001528  txvalve
+00166A  MAIN
+00166A  @cinit1
+0016E0  @cinit2
+0136  StrtoulGO
+0136  StrtolGO
+
+Project Directory:
+    C:\PIC_LORA_PROTEUS\PIC\PIC_LOra\
+
+Project Files:
+    PIC_LORA.c                                              [26-Mar-26 13:36  CRC=7E495171]
+    ..\..\..\Program Files (x86)\PICC\Devices\18F25K22.h    [12-Nov-13 14:35  CRC=C9966415]
+    ..\..\..\Program Files (x86)\PICC\Drivers\stdlib.h      [08-Jun-11 14:39  CRC=0B6669CF]
+    ..\..\..\Program Files (x86)\PICC\Drivers\stddef.h      [16-Jul-10 09:27  CRC=897CEC6C]
+    ..\..\..\Program Files (x86)\PICC\Drivers\string.h      [14-Jul-11 10:13  CRC=23EDEC8F]
+    ..\..\..\Program Files (x86)\PICC\Drivers\ctype.h       [03-Jan-08 13:55  CRC=2D1F019F]
+    ..\..\..\Program Files (x86)\PICC\Drivers\internal_eeprom.c [24-Aug-12 16:54  CRC=D75DC435]
+
+Source signature=DC8B8259
+
+Units:
+    PIC_LORA (main)
+
+Compiler Settings:
+    Processor:      PIC18F25K22
+    Pointer Size:   16
+    ADC Range:      0-1023
+    Opt Level:      9
+    Short,Int,Long: UNSIGNED: 1,8,16
+    Float,Double:   32,32
+
+Output Files:
+    XREF file:   PIC_LORA.xsym
+    Errors:      PIC_LORA.err
+    Ext Symbols: PIC_LORA.esym
+    INHX32:      PIC_LORA.hex
+    Symbols:     PIC_LORA.sym
+    List:        PIC_LORA.lst
+    Debug/COFF:  PIC_LORA.cof
+    Project:     PIC_LORA.ccspjt
+    Call Tree:   PIC_LORA.tre
+    Statistics:  PIC_LORA.STA

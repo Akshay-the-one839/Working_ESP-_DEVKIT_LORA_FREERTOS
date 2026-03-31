@@ -1,0 +1,699 @@
+#include <18F25K22.h>
+#device ADC=10
+#INCLUDE <stdlib.h>
+
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN
+#fuses IESO
+#use delay(xtal=20MHz, clock=20MHz)
+#byte clock_source=getenv("clock")
+
+#use rs232(stream=COM_1,baud=9600,parity=N,xmit=PIN_C6,rcv=PIN_C7,bits=8)
+#include "internal_eeprom.c"
+
+// ------------------------------------------------------------------
+// Pin definitions
+// ------------------------------------------------------------------
+#define V1      PIN_B0
+#define V2      PIN_B1
+#define V3      PIN_B2
+#define V4      PIN_B3
+#define V5      PIN_B4
+#define V6      PIN_B5
+#define V7      PIN_B6
+#define V8      PIN_B7
+#define SIGLED  PIN_C3
+
+// ------------------------------------------------------------------
+// SET THIS CHIP'S SLAVE ID
+//   Slave A : #define MY_ID  'A'
+//   Slave B : #define MY_ID  'B'
+//   Slave C : #define MY_ID  'C'
+// ------------------------------------------------------------------
+#define MY_ID  'A'
+
+// ------------------------------------------------------------------
+// VALVE ON DELAY — non-blocking, counted in Timer1 seconds
+// A new ON command is ignored for this many seconds after a valve
+// is already energised (debounce / inrush protection).
+// ------------------------------------------------------------------
+#define VALVE_ON_DELAY_S  2
+
+// ------------------------------------------------------------------
+// EEPROM ADDRESS MAP
+//   PIC18F25K22 has 256 bytes of data EEPROM (0x00 to 0xFF)
+//
+//   Address  | Size | Contents
+//   ---------+------+------------------------------------------
+//   0x00     | 1 B  | Magic marker (0xA5) — written at first boot.
+//             |      | If not 0xA5, EEPROM uninitialised -> all OFF.
+//   0x01     | 1 B  | Valve 1 state  (0x30='0' OFF, 0x31='1' ON)
+//   0x02     | 1 B  | Valve 2 state
+//   0x03     | 1 B  | Valve 3 state
+//   0x04     | 1 B  | Valve 4 state
+//   0x05     | 1 B  | Valve 5 state
+//   0x06     | 1 B  | Valve 6 state
+//   0x07     | 1 B  | Valve 7 state
+//   0x08     | 1 B  | Valve 8 state
+//   0x09     | 1 B  | vanoflg1 (energise flag valve 1)
+//   0x0A     | 1 B  | vanoflg2
+//   0x0B     | 1 B  | vanoflg3
+//   0x0C     | 1 B  | vanoflg4
+//   0x0D     | 1 B  | vanoflg5
+//   0x0E     | 1 B  | vanoflg6
+//   0x0F     | 1 B  | vanoflg7
+//   0x10     | 1 B  | vanoflg8
+//   0x28     | 1 B  | hr  (wall clock)
+//   0x29     | 1 B  | min (wall clock)
+//   0x2A..FF |      | RESERVED / unused
+// ------------------------------------------------------------------
+#define EEPROM_MAGIC_ADDR    0x00
+#define EEPROM_MAGIC_VALUE   0xA5
+#define EEPROM_STATE_BASE    0x01   // 8 bytes: valve states  (0x01..0x08)
+#define EEPROM_FLAG_BASE     0x09   // 8 bytes: vanoflg values(0x09..0x10)
+
+// ------------------------------------------------------------------
+// UART hardware register bits (direct map)
+// ------------------------------------------------------------------
+#byte RCSTA = 0xFAB
+#bit  OERR  = RCSTA.1
+#bit  FERR  = RCSTA.2
+#bit  CREN  = RCSTA.4
+
+// ------------------------------------------------------------------
+// Valve state variables ('0' = OFF, '1' = ON as ASCII chars)
+// ------------------------------------------------------------------
+char state1='0';
+char state2='0';
+char state3='0';
+char state4='0';
+char state5='0';
+char state6='0';
+char state7='0';
+char state8='0';
+
+// Energise flags — set when valve turned ON, cleared when turned OFF
+int1 vanoflg1=0;
+int1 vanoflg2=0;
+int1 vanoflg3=0;
+int1 vanoflg4=0;
+int1 vanoflg5=0;
+int1 vanoflg6=0;
+int1 vanoflg7=0;
+int1 vanoflg8=0;
+
+// Dirty flag: set when a pending-OFF fires in the main loop so we
+// can batch the EEPROM write once, not once per valve.
+int1 eeprom_valve_dirty = 0;
+
+// ------------------------------------------------------------------
+// Per-valve non-blocking countdown timers (seconds)
+// Loaded with VALVE_ON_DELAY_S when valve turns ON.
+// Decremented each second by Timer1 ISR.
+// OFF command is held pending until timer reaches 0.
+// ------------------------------------------------------------------
+volatile int8 v1_timer=0;
+volatile int8 v2_timer=0;
+volatile int8 v3_timer=0;
+volatile int8 v4_timer=0;
+volatile int8 v5_timer=0;
+volatile int8 v6_timer=0;
+volatile int8 v7_timer=0;
+volatile int8 v8_timer=0;
+
+// ------------------------------------------------------------------
+// RX / packet variables
+// ------------------------------------------------------------------
+int1  RX_Command_Ready = 0;     // set by ISR when full packet received
+char  RxBuffer[60];             // raw bytes after the MY_ID header byte
+char  TimeBuffer[9];            // time field extracted by parser
+char  vno1,vno2,vno3,vno4,vno5,vno6,vno7,vno8;  // valve number chars
+
+// ------------------------------------------------------------------
+// Timer1 / wall-clock variables
+// ------------------------------------------------------------------
+int8  overflow_count = 0;       // counts Timer1 overflows to reach 1 s
+int8  sec      = 0;
+int8  min      = 0;
+int8  hr       = 0;
+int8  bwmin    = 0;
+int8  bwminv1  = 0;
+int8  bwminv2  = 0;
+
+unsigned int16 eeprom_base_address = 0;
+
+volatile int1 txflg = 0;        // set when an ACK needs to be transmitted
+
+// ------------------------------------------------------------------
+// save_valve_states_to_eeprom()
+//
+// Writes current state of all 8 valves AND their vanoflg values to
+// EEPROM so they survive a power cycle.
+// Called once after every successful packet parse + GPIO change,
+// and once after a pending-OFF fires — NOT every loop tick.
+// ------------------------------------------------------------------
+void save_valve_states_to_eeprom(void)
+{
+    // Magic marker so boot code knows EEPROM has valid data
+    write_eeprom(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VALUE);
+
+    // Valve states stored as raw char ('0' or '1')
+    write_eeprom(EEPROM_STATE_BASE + 0, (int8)state1);
+    write_eeprom(EEPROM_STATE_BASE + 1, (int8)state2);
+    write_eeprom(EEPROM_STATE_BASE + 2, (int8)state3);
+    write_eeprom(EEPROM_STATE_BASE + 3, (int8)state4);
+    write_eeprom(EEPROM_STATE_BASE + 4, (int8)state5);
+    write_eeprom(EEPROM_STATE_BASE + 5, (int8)state6);
+    write_eeprom(EEPROM_STATE_BASE + 6, (int8)state7);
+    write_eeprom(EEPROM_STATE_BASE + 7, (int8)state8);
+
+    // Energise flags (0 or 1)
+    write_eeprom(EEPROM_FLAG_BASE + 0, (int8)vanoflg1);
+    write_eeprom(EEPROM_FLAG_BASE + 1, (int8)vanoflg2);
+    write_eeprom(EEPROM_FLAG_BASE + 2, (int8)vanoflg3);
+    write_eeprom(EEPROM_FLAG_BASE + 3, (int8)vanoflg4);
+    write_eeprom(EEPROM_FLAG_BASE + 4, (int8)vanoflg5);
+    write_eeprom(EEPROM_FLAG_BASE + 5, (int8)vanoflg6);
+    write_eeprom(EEPROM_FLAG_BASE + 6, (int8)vanoflg7);
+    write_eeprom(EEPROM_FLAG_BASE + 7, (int8)vanoflg8);
+
+    printf("[EEPROM] States saved\r\n");
+}
+
+// ------------------------------------------------------------------
+// load_valve_states_from_eeprom()
+//
+// Called once at boot. Reads back states and flags then drives GPIO
+// pins to match. If magic byte is missing (first boot / erased chip)
+// all valves default to OFF — safe behaviour.
+// ------------------------------------------------------------------
+void load_valve_states_from_eeprom(void)
+{
+    int8 magic = read_eeprom(EEPROM_MAGIC_ADDR);
+
+    if (magic != EEPROM_MAGIC_VALUE)
+    {
+        // First boot or erased chip — default everything OFF
+        printf("[EEPROM] No saved state (magic=0x%02X) -> defaulting OFF\r\n", magic);
+
+        state1='0'; state2='0'; state3='0'; state4='0';
+        state5='0'; state6='0'; state7='0'; state8='0';
+        vanoflg1=0; vanoflg2=0; vanoflg3=0; vanoflg4=0;
+        vanoflg5=0; vanoflg6=0; vanoflg7=0; vanoflg8=0;
+
+        output_low(V1); output_low(V2);
+        output_low(V3); output_low(V4);
+        output_low(V5); output_low(V6);
+        output_low(V7); output_low(V8);
+
+        // Write magic + all-OFF so next boot is clean
+        save_valve_states_to_eeprom();
+        return;
+    }
+
+    // Valid saved state — restore it
+    state1 = (char)read_eeprom(EEPROM_STATE_BASE + 0);
+    state2 = (char)read_eeprom(EEPROM_STATE_BASE + 1);
+    state3 = (char)read_eeprom(EEPROM_STATE_BASE + 2);
+    state4 = (char)read_eeprom(EEPROM_STATE_BASE + 3);
+    state5 = (char)read_eeprom(EEPROM_STATE_BASE + 4);
+    state6 = (char)read_eeprom(EEPROM_STATE_BASE + 5);
+    state7 = (char)read_eeprom(EEPROM_STATE_BASE + 6);
+    state8 = (char)read_eeprom(EEPROM_STATE_BASE + 7);
+
+    vanoflg1 = (int1)read_eeprom(EEPROM_FLAG_BASE + 0);
+    vanoflg2 = (int1)read_eeprom(EEPROM_FLAG_BASE + 1);
+    vanoflg3 = (int1)read_eeprom(EEPROM_FLAG_BASE + 2);
+    vanoflg4 = (int1)read_eeprom(EEPROM_FLAG_BASE + 3);
+    vanoflg5 = (int1)read_eeprom(EEPROM_FLAG_BASE + 4);
+    vanoflg6 = (int1)read_eeprom(EEPROM_FLAG_BASE + 5);
+    vanoflg7 = (int1)read_eeprom(EEPROM_FLAG_BASE + 6);
+    vanoflg8 = (int1)read_eeprom(EEPROM_FLAG_BASE + 7);
+
+    // Re-drive GPIO to match saved state
+    if (state1 == '1') output_high(V1); else output_low(V1);
+    if (state2 == '1') output_high(V2); else output_low(V2);
+    if (state3 == '1') output_high(V3); else output_low(V3);
+    if (state4 == '1') output_high(V4); else output_low(V4);
+    if (state5 == '1') output_high(V5); else output_low(V5);
+    if (state6 == '1') output_high(V6); else output_low(V6);
+    if (state7 == '1') output_high(V7); else output_low(V7);
+    if (state8 == '1') output_high(V8); else output_low(V8);
+
+    printf("[EEPROM] States restored: %c%c%c%c%c%c%c%c\r\n",
+           state1,state2,state3,state4,state5,state6,state7,state8);
+}
+
+// ------------------------------------------------------------------
+// setup_timer1_for_1s_interrupt()
+//
+// Timer1 internal clock, prescaler /8.
+// At 20 MHz: Fosc/4 = 5 MHz timer clock.
+// With /8 prescaler: 625 kHz effective tick.
+// Reload value 34286 -> (65536-34286) = 31250 ticks * (1/625000) = 50 ms.
+// 20 overflows x 50 ms = 1 second.
+// ------------------------------------------------------------------
+void setup_timer1_for_1s_interrupt(void)
+{
+    setup_timer_1(T1_INTERNAL | T1_DIV_BY_8);
+    set_timer1(34286);
+    enable_interrupts(INT_TIMER1);
+}
+
+// ------------------------------------------------------------------
+// Timer1 ISR — fires every ~50 ms
+// Counts 20 ticks to produce a 1-second event.
+// Decrements per-valve timers and maintains wall clock.
+// Keep short — no printf, no blocking ops.
+// ------------------------------------------------------------------
+#INT_TIMER1
+void timer1_isr(void)
+{
+    overflow_count++;
+    set_timer1(34286);          // reload immediately to keep timing accurate
+
+    if (overflow_count >= 20)   // 20 x 50 ms = 1 second
+    {
+        overflow_count = 0;
+        sec++;
+
+        // Decrement per-valve ON-delay timers (each counts down to 0)
+        if (v1_timer > 0) v1_timer--;
+        if (v2_timer > 0) v2_timer--;
+        if (v3_timer > 0) v3_timer--;
+        if (v4_timer > 0) v4_timer--;
+        if (v5_timer > 0) v5_timer--;
+        if (v6_timer > 0) v6_timer--;
+        if (v7_timer > 0) v7_timer--;
+        if (v8_timer > 0) v8_timer--;
+
+        // Wall clock
+        if (sec >= 59)
+        {
+            sec = 0;
+            min++;
+            bwminv1++; if (bwminv1 >= 11) bwminv1 = 0;
+            bwminv2++; if (bwminv2 >= 11) bwminv2 = 0;
+
+            // Persist wall clock to EEPROM (addresses 40/41 unchanged from original)
+            write_eeprom(eeprom_base_address + 40, hr);
+            write_eeprom(eeprom_base_address + 41, min);
+
+            if (min >= 59) { min = 0; hr++; }
+            if (hr  >= 24)   hr = 0;
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// EEPROM helpers (retained from original for compatibility)
+// ------------------------------------------------------------------
+void store_byte(unsigned int16 address, unsigned char value)
+{
+    if (address < 256) write_eeprom(address, value);
+}
+
+unsigned char retrieve_byte(unsigned int16 address)
+{
+    if (address < 256) return read_eeprom(address);
+    return 0;
+}
+
+// ------------------------------------------------------------------
+// RDA ISR — collect one LoRa packet from COM_1
+//
+// PACKET FORMAT (transmitted by master):
+//   [MY_ID] 1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*
+//   |-------|-----------------------------------|
+//   header       payload (33 bytes + final '*')
+//
+//  - First byte is the slave ID ('A', 'B', 'C' ...).
+//    Packets for other slaves are silently discarded.
+//  - Payload: "V*S*V*S*...*TT*" where V=valve number, S=state,
+//    TT=time field (2 chars), terminated by '*'.
+//  - Total payload bytes before (and including) the final '*' = 34.
+//
+// FIX vs original:
+//   Old code broke out of the receive loop when (x=='*' && idx>30).
+//   This fired on the '*' after valve 7 (~index 27-28), cutting off
+//   valves 7 and 8 entirely.
+//   New code continues until idx>=33 AND the current byte is '*',
+//   which is the sentinel '*' after "00" at the very end of the
+//   packet — ensuring all 8 valves are safely in the buffer.
+//
+// Keep this ISR short: no printf, no delay_ms.
+// ------------------------------------------------------------------
+#int_RDA
+void RDA_isr(void)
+{
+    // Hardware error recovery
+    if (OERR) { CREN = 0; CREN = 1; return; }  // overrun: reset receiver
+    if (FERR) { getc(COM_1); return; }           // framing: discard bad byte
+
+    // Read and filter the slave-ID header byte
+    char first = getc(COM_1);
+    if (first != MY_ID) return;     // not for us — discard silently
+
+    int8 idx = 0;
+    char x;
+
+    // Collect payload bytes.
+    // Packet ends with "00*" (time field + terminator).
+    // Full payload up to and including the final '*' is 34 bytes:
+    //   "1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*"
+    //    0123456789012345678901234567890123456
+    //                                       ^ idx=33 when '*' is read here
+    //
+    // Break condition: we have consumed at least 33 bytes AND the
+    // current byte is '*' (the final packet terminator).
+    // This correctly handles all 8 valve fields before breaking.
+    while (idx < 55)
+    {
+        x = getc(COM_1);
+        RxBuffer[idx] = x;
+        idx++;
+
+        // Exit only after the trailing sentinel '*' of "00*"
+        if (idx >= 34 && x == '*') break;
+    }
+
+    RxBuffer[idx] = '\0';           // null-terminate for strtok
+    RX_Command_Ready = 1;           // signal main loop to process packet
+}
+
+// ------------------------------------------------------------------
+// txvalve() — send ACK frame back to master (5 retries)
+// Format: $A,1,<s1>,2,<s2>,...,8,<s8>,\n
+// ------------------------------------------------------------------
+void txvalve(void)
+{
+    int8 k;
+    for (k = 0; k < 5; k++)
+    {
+        output_high(SIGLED);
+        fprintf(COM_1, "$");
+        fprintf(COM_1, "%c,", MY_ID);
+        fprintf(COM_1, "1,%c,", state1);
+        fprintf(COM_1, "2,%c,", state2);
+        fprintf(COM_1, "3,%c,", state3);
+        fprintf(COM_1, "4,%c,", state4);
+        fprintf(COM_1, "5,%c,", state5);
+        fprintf(COM_1, "6,%c,", state6);
+        fprintf(COM_1, "7,%c,", state7);
+        fprintf(COM_1, "8,%c,", state8);
+        fprintf(COM_1, "\n");
+        delay_ms(100);
+    }
+    output_low(SIGLED);
+    txflg = 0;
+}
+
+// ------------------------------------------------------------------
+// parse_packet()
+//
+// Tokenises RxBuffer (already null-terminated) on '*' delimiter.
+// Expected token sequence (index 0..16):
+//   0:vno1  1:state1  2:vno2  3:state2 ... 14:vno8  15:state8  16:time
+//
+// This is unchanged from the original — the bug was only in the ISR.
+// ------------------------------------------------------------------
+void parse_packet(void)
+{
+    char *ptr;
+    int   index = 0;
+    char  sep[] = "*";
+
+    ptr = strtok(RxBuffer, sep);
+
+    while (ptr != NULL)
+    {
+        switch (index)
+        {
+            case  0: vno1   = ptr[0]; break;
+            case  1: state1 = ptr[0]; break;
+            case  2: vno2   = ptr[0]; break;
+            case  3: state2 = ptr[0]; break;
+            case  4: vno3   = ptr[0]; break;
+            case  5: state3 = ptr[0]; break;
+            case  6: vno4   = ptr[0]; break;
+            case  7: state4 = ptr[0]; break;
+            case  8: vno5   = ptr[0]; break;
+            case  9: state5 = ptr[0]; break;
+            case 10: vno6   = ptr[0]; break;
+            case 11: state6 = ptr[0]; break;
+            case 12: vno7   = ptr[0]; break;
+            case 13: state7 = ptr[0]; break;
+            case 14: vno8   = ptr[0]; break;
+            case 15: state8 = ptr[0]; break;
+            case 16: strcpy(TimeBuffer, ptr); break;
+        }
+        ptr = strtok(NULL, sep);
+        index++;
+    }
+
+    // Debug print — disable in production if UART bandwidth is tight
+    printf("\r\n=== Parsed Packet ===\r\n");
+    printf("SlaveID: %c\r\n", MY_ID);
+    printf("Time   : %s\r\n", TimeBuffer);
+    printf("V1:%c S:%c  V2:%c S:%c  V3:%c S:%c  V4:%c S:%c\r\n",
+           vno1,state1, vno2,state2, vno3,state3, vno4,state4);
+    printf("V5:%c S:%c  V6:%c S:%c  V7:%c S:%c  V8:%c S:%c\r\n",
+           vno5,state5, vno6,state6, vno7,state7, vno8,state8);
+    printf("=====================\r\n");
+}
+
+// ------------------------------------------------------------------
+// main()
+// ------------------------------------------------------------------
+void main(void)
+{
+    // Port initialisation
+    output_b(0x00);
+    set_tris_a(0xFF);
+    set_tris_b(0xCF);   // B0..B5 = output (valves), B6..B7 = output
+    set_tris_c(0xB8);   // C3 = output (SIGLED), C6 = TX, C7 = RX
+
+    // Start Timer1 for 1-second tick
+    setup_timer1_for_1s_interrupt();
+
+    // Enable UART receive and global interrupts
+    enable_interrupts(INT_RDA);
+    enable_interrupts(GLOBAL);
+
+    // Restore valve states from EEPROM (power-loss recovery)
+    load_valve_states_from_eeprom();
+
+    // ----------------------------------------------------------------
+    // Main loop
+    // ----------------------------------------------------------------
+    while (true)
+    {
+        // ------------------------------------------------------------
+        // Process incoming LoRa packet
+        // ------------------------------------------------------------
+        if (RX_Command_Ready == 1)
+        {
+            RX_Command_Ready = 0;
+            parse_packet();
+
+            // ---- VALVE 1 ----
+            if (vno1 == '1')
+            {
+                if (state1 == '1' && vanoflg1 == 0)
+                {
+                    output_high(V1);
+                    vanoflg1 = 1;
+                    v1_timer = VALVE_ON_DELAY_S;    // start ON-delay guard
+                }
+                if (state1 == '0' && vanoflg1 == 1 && v1_timer == 0)
+                {
+                    output_low(V1);
+                    vanoflg1 = 0;
+                }
+            }
+
+            // ---- VALVE 2 ----
+            if (vno2 == '2')
+            {
+                if (state2 == '1' && vanoflg2 == 0)
+                {
+                    output_high(V2);
+                    vanoflg2 = 1;
+                    v2_timer = VALVE_ON_DELAY_S;
+                }
+                if (state2 == '0' && vanoflg2 == 1 && v2_timer == 0)
+                {
+                    output_low(V2);
+                    vanoflg2 = 0;
+                }
+            }
+
+            // ---- VALVE 3 ----
+            if (vno3 == '3')
+            {
+                if (state3 == '1' && vanoflg3 == 0)
+                {
+                    output_high(V3);
+                    vanoflg3 = 1;
+                    v3_timer = VALVE_ON_DELAY_S;
+                }
+                if (state3 == '0' && vanoflg3 == 1 && v3_timer == 0)
+                {
+                    output_low(V3);
+                    vanoflg3 = 0;
+                }
+            }
+
+            // ---- VALVE 4 ----
+            if (vno4 == '4')
+            {
+                if (state4 == '1' && vanoflg4 == 0)
+                {
+                    output_high(V4);
+                    vanoflg4 = 1;
+                    v4_timer = VALVE_ON_DELAY_S;
+                }
+                if (state4 == '0' && vanoflg4 == 1 && v4_timer == 0)
+                {
+                    output_low(V4);
+                    vanoflg4 = 0;
+                }
+            }
+
+            // ---- VALVE 5 ----
+            if (vno5 == '5')
+            {
+                if (state5 == '1' && vanoflg5 == 0)
+                {
+                    output_high(V5);
+                    vanoflg5 = 1;
+                    v5_timer = VALVE_ON_DELAY_S;
+                }
+                if (state5 == '0' && vanoflg5 == 1 && v5_timer == 0)
+                {
+                    output_low(V5);
+                    vanoflg5 = 0;
+                }
+            }
+
+            // ---- VALVE 6 ----
+            if (vno6 == '6')
+            {
+                if (state6 == '1' && vanoflg6 == 0)
+                {
+                    output_high(V6);
+                    vanoflg6 = 1;
+                    v6_timer = VALVE_ON_DELAY_S;
+                }
+                if (state6 == '0' && vanoflg6 == 1 && v6_timer == 0)
+                {
+                    output_low(V6);
+                    vanoflg6 = 0;
+                }
+            }
+
+            // ---- VALVE 7 ----
+            // Previously broken: ISR exited before valve 7 data arrived.
+            // Now fixed by corrected break condition in RDA_isr().
+            if (vno7 == '7')
+            {
+                if (state7 == '1' && vanoflg7 == 0)
+                {
+                    output_high(V7);
+                    vanoflg7 = 1;
+                    v7_timer = VALVE_ON_DELAY_S;
+                }
+                if (state7 == '0' && vanoflg7 == 1 && v7_timer == 0)
+                {
+                    output_low(V7);
+                    vanoflg7 = 0;
+                }
+            }
+
+            // ---- VALVE 8 ----
+            // Same fix applies here.
+            if (vno8 == '8')
+            {
+                if (state8 == '1' && vanoflg8 == 0)
+                {
+                    output_high(V8);
+                    vanoflg8 = 1;
+                    v8_timer = VALVE_ON_DELAY_S;
+                }
+                if (state8 == '0' && vanoflg8 == 1 && v8_timer == 0)
+                {
+                    output_low(V8);
+                    vanoflg8 = 0;
+                }
+            }
+
+            // Save new states to EEPROM once after all 8 valves processed
+            save_valve_states_to_eeprom();
+
+            // Send ACK back to master
+            txflg = 1;
+            txvalve();
+
+        } // end RX_Command_Ready
+
+        // ------------------------------------------------------------
+        // Pending OFF check
+        // If an OFF command arrived while the ON-delay timer was still
+        // counting, the valve was kept ON. Once the timer reaches 0,
+        // apply the pending OFF here.
+        // Sets eeprom_valve_dirty so the OFF state is persisted once
+        // after all valves are checked (not once per valve).
+        // ------------------------------------------------------------
+        if (vanoflg1 == 1 && v1_timer == 0 && state1 == '0')
+        {
+            output_low(V1); vanoflg1 = 0;
+            eeprom_valve_dirty = 1;
+        }
+        if (vanoflg2 == 1 && v2_timer == 0 && state2 == '0')
+        {
+            output_low(V2); vanoflg2 = 0;
+            eeprom_valve_dirty = 1;
+        }
+        if (vanoflg3 == 1 && v3_timer == 0 && state3 == '0')
+        {
+            output_low(V3); vanoflg3 = 0;
+            eeprom_valve_dirty = 1;
+        }
+        if (vanoflg4 == 1 && v4_timer == 0 && state4 == '0')
+        {
+            output_low(V4); vanoflg4 = 0;
+            eeprom_valve_dirty = 1;
+        }
+        if (vanoflg5 == 1 && v5_timer == 0 && state5 == '0')
+        {
+            output_low(V5); vanoflg5 = 0;
+            eeprom_valve_dirty = 1;
+        }
+        if (vanoflg6 == 1 && v6_timer == 0 && state6 == '0')
+        {
+            output_low(V6); vanoflg6 = 0;
+            eeprom_valve_dirty = 1;
+        }
+        if (vanoflg7 == 1 && v7_timer == 0 && state7 == '0')
+        {
+            output_low(V7); vanoflg7 = 0;
+            eeprom_valve_dirty = 1;
+        }
+        if (vanoflg8 == 1 && v8_timer == 0 && state8 == '0')
+        {
+            output_low(V8); vanoflg8 = 0;
+            eeprom_valve_dirty = 1;
+        }
+
+        // Turn off signal LED in idle state
+        output_low(SIGLED);
+
+        // Batch EEPROM save — only when something actually changed
+        if (eeprom_valve_dirty)
+        {
+            eeprom_valve_dirty = 0;
+            save_valve_states_to_eeprom();
+        }
+
+        delay_ms(10);   // small cooperative yield
+    } // while(true)
+} // main

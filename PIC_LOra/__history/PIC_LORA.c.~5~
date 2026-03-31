@@ -1,0 +1,242 @@
+#include <18F25K22.h>
+#device ADC=10
+#INCLUDE <stdlib.h>
+#INCLUDE <string.h>
+
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN
+#fuses IESO
+#use delay(xtal=20MHz, clock=20MHz)
+#byte clock_source=getenv("clock")
+
+#use rs232(stream=COM_1,baud=9600,parity=N,xmit=PIN_C6,rcv=PIN_C7,bits=8)
+#include "internal_eeprom.c"
+
+#define V1 PIN_B3
+#define V2 PIN_B2
+#define V3 PIN_B0
+#define V4 PIN_B1
+#define V5 PIN_B6
+#define V6 PIN_B5
+#define V7 PIN_B7
+#define V8 PIN_B4
+#define SIGLED PIN_C3
+
+// RxBuffer increased for new packet format
+#define RX_BUF_SIZE 96
+char RxBuffer[RX_BUF_SIZE];
+int8 RxIndex = 0;
+
+int1 RX_Command_Ready = 0;
+
+char state1='0', state2='0', state3='0', state4='0';
+char state5='0', state6='0', state7='0', state8='0';
+
+char vno1, vno2, vno3, vno4, vno5, vno6, vno7, vno8;
+char bw[2];
+
+int1 vanoflg1=0, vanoflg2=0, vanoflg3=0, vanoflg4=0;
+int1 vanoflg5=0, vanoflg6=0, vanoflg7=0, vanoflg8=0;
+
+int1 txflg=0;
+int1 txflgg=0;
+
+int8 overflow_count=0;
+int8 sec=0, min=0, hr=0;
+int8 bwmin=0, bwminv1=0, bwminv2=0;
+
+unsigned int16 eeprom_base_address=0;
+
+// --- Timer1 (unchanged) -------------------------------------------------------
+void setup_timer1_for_1s_interrupt() {
+    setup_timer_1(T1_INTERNAL | T1_DIV_BY_8);
+    set_timer1(34286);
+    enable_interrupts(INT_TIMER1);
+}
+
+#INT_TIMER1
+void timer1_isr() {
+    overflow_count++;
+    set_timer1(34286);
+    if (overflow_count >= 20) {
+        sec++;
+        overflow_count = 0;
+        if (sec >= 59) {
+            sec = 0; min++;
+            bwminv1++; if (bwminv1 >= 11) bwminv1 = 0;
+            bwminv2++; if (bwminv2 >= 11) bwminv2 = 0;
+            write_eeprom(eeprom_base_address + 40, hr);
+            write_eeprom(eeprom_base_address + 41, min);
+            if (min >= 59) { min = 0; hr++; }
+            if (hr  >= 24) hr = 0;
+        }
+    }
+}
+
+void store_byte(unsigned int16 address, unsigned char value) {
+    if (address < 256) write_eeprom(address, value);
+}
+
+unsigned char retrieve_byte(unsigned int16 address) {
+    if (address < 256) return read_eeprom(address);
+    return 0;
+}
+
+// --- CHANGED: RDA ISR — collect until '#' ------------------------------------
+#int_RDA
+void RDA_isr(void) {
+    char c;
+    c = getc(COM_1);
+
+    if (c == '$') {
+        int8 i;
+        for (i = 0; i < RX_BUF_SIZE; i++) RxBuffer[i] = 0;
+        RxIndex = 0;
+        RxBuffer[RxIndex++] = c;
+    } else if (RxIndex > 0 && RxIndex < RX_BUF_SIZE - 1) {
+        RxBuffer[RxIndex++] = c;
+        if (c == '#') {
+            RxBuffer[RxIndex] = '\0';
+            RX_Command_Ready = 1;
+            RxIndex = 0;
+        }
+    }
+
+    if (c == 'a') txflg = 1;
+}
+
+// --- txvalve (unchanged) ------------------------------------------------------
+void txvalve() {
+    int16 i2;
+    for (i2 = 0; i2 < 5; i2++) {
+        if (txflg == 1) {
+            output_high(SIGLED);
+            printf("$");
+            printf("A");  printf(",");
+            printf("1");  printf(","); printf("%c",state1); printf(",");
+            printf("2");  printf(","); printf("%c",state2); printf(",");
+            printf("3");  printf(","); printf("%c",state3); printf(",");
+            printf("4");  printf(","); printf("%c",state4); printf(",");
+            printf("5");  printf(","); printf("%c",state5); printf(",");
+            printf("6");  printf(","); printf("%c",state6); printf(",");
+            printf("7");  printf(","); printf("%c",state7); printf(",");
+            printf("8");  printf(","); printf("%c",state8); printf(",");
+        }
+        delay_ms(200);
+    }
+    txflg = 0;
+    output_low(SIGLED);
+}
+
+// --- CHANGED: getToken — extract Nth token from '*' separated string ---------
+// Returns the first character of the Nth token (0-based)
+// Used to get valve number and state without pointers
+char getTokenChar(char *buf, int8 tokenIndex) {
+    int8 tcount = 0;
+    int8 i = 0;
+    while (buf[i] != '\0') {
+        if (tcount == tokenIndex) {
+            return buf[i];   // first char of this token
+        }
+        if (buf[i] == '*' || buf[i] == '#') {
+            tcount++;
+        }
+        i++;
+    }
+    return '0';  // default
+}
+
+// --- CHANGED: processCommand — index-based parser, no pointers ---------------
+void processCommand() {
+    int8 i;
+
+    // Zone A only — RxBuffer[3] is 'A' or 'B' in $M*A*...
+    if (RxBuffer[3] != 'A') return;
+
+    // Find '#' and null terminate
+    for (i = 0; i < RX_BUF_SIZE; i++) {
+        if (RxBuffer[i] == '#') { RxBuffer[i] = '\0'; break; }
+    }
+
+    // Count tokens to verify full packet
+    int8 tcount = 0;
+    for (i = 0; i < RX_BUF_SIZE && RxBuffer[i] != '\0'; i++) {
+        if (RxBuffer[i] == '*') tcount++;
+    }
+    if (tcount < 19) return;  // need 19 '*' separators for 20 tokens
+
+    // Extract valve numbers and states using token index
+    // Token map: [0]=$M [1]=A [2]=vno1 [3]=s1 [4]=x [5]=timer
+    //            [6]=vno2 [7]=s2 ... [18]=vno8 [19]=s8
+    vno1  = getTokenChar(RxBuffer, 2);
+    state1= getTokenChar(RxBuffer, 3);
+    vno2  = getTokenChar(RxBuffer, 6);
+    state2= getTokenChar(RxBuffer, 7);
+    vno3  = getTokenChar(RxBuffer, 8);
+    state3= getTokenChar(RxBuffer, 9);
+    vno4  = getTokenChar(RxBuffer, 10);
+    state4= getTokenChar(RxBuffer, 11);
+    vno5  = getTokenChar(RxBuffer, 12);
+    state5= getTokenChar(RxBuffer, 13);
+    vno6  = getTokenChar(RxBuffer, 14);
+    state6= getTokenChar(RxBuffer, 15);
+    vno7  = getTokenChar(RxBuffer, 16);
+    state7= getTokenChar(RxBuffer, 17);
+    vno8  = getTokenChar(RxBuffer, 18);
+    state8= getTokenChar(RxBuffer, 19);
+
+    // -- UNCHANGED from original PIC code -------------------------------------
+
+    if (vno1=='1' && vanoflg1==0) { if (state1=='1') { output_high(V1); vanoflg1=1; } }
+    if (vno1=='1' && vanoflg1==1) { if (state1=='0') { output_low(V1);  vanoflg1=0; } }
+
+    if (vno2=='2' && vanoflg2==0) { if (state2=='1') { output_high(V2); vanoflg2=1; } }
+    if (vno2=='2' && vanoflg2==1) { if (state2=='0') { output_low(V2);  vanoflg2=0; } }
+
+    if (vno3=='3' && vanoflg3==0) { if (state3=='1') { output_high(V3); vanoflg3=1; delay_ms(2000); } }
+    if (vno3=='3' && vanoflg3==1) { if (state3=='0') { output_low(V3);  vanoflg3=0; } }
+
+    if (vno4=='4' && vanoflg4==0) { if (state4=='1') { output_high(V4); vanoflg4=1; delay_ms(2000); } }
+    if (vno4=='4' && vanoflg4==1) { if (state4=='0') { output_low(V4);  vanoflg4=0; } }
+
+    if (vno5=='5' && vanoflg5==0) { if (state5=='1') { output_high(V5); vanoflg5=1; delay_ms(2000); } }
+    if (vno5=='5' && vanoflg5==1) { if (state5=='0') { output_low(V5);  vanoflg5=0; } }
+
+    if (vno6=='6' && vanoflg6==0) { if (state6=='1') { output_high(V6); vanoflg6=1; delay_ms(2000); } }
+    if (vno6=='6' && vanoflg6==1) { if (state6=='0') { output_low(V6);  vanoflg6=0; } }
+
+    if (vno7=='7' && vanoflg7==0) { if (state7=='1') { output_high(V7); vanoflg7=1; delay_ms(2000); } }
+    if (vno7=='7' && vanoflg7==1) { if (state7=='0') { output_low(V7);  vanoflg7=0; } }
+
+    if (vno8=='8' && vanoflg8==0) { if (state8=='1') { output_high(V8); vanoflg8=1; delay_ms(2000); } }
+    if (vno8=='8' && vanoflg8==1) { if (state8=='0') { output_low(V8);  vanoflg8=0; } }
+}
+
+// --- main (unchanged) ---------------------------------------------------------
+void main() {
+    output_b(0x00);
+    set_tris_a(0xff);
+    SET_TRIS_b(0xcf);
+    SET_TRIS_c(0xb8);
+
+    setup_timer1_for_1s_interrupt();
+    setup_timer_1(T1_DISABLED);
+
+    enable_interrupts(INT_RDA);
+    enable_interrupts(GLOBAL);
+
+    output_low(V1); output_low(V2);
+    output_low(V3); output_low(V4);
+    output_low(V5); output_low(V6);
+    output_low(V7); output_low(V8);
+    output_low(SIGLED);
+
+    while (true) {
+        if (RX_Command_Ready == 1) {
+            RX_Command_Ready = 0;
+            processCommand();
+        }
+        output_low(SIGLED);
+        if (txflg == 1) txvalve();
+        delay_ms(1000);
+    }
+}

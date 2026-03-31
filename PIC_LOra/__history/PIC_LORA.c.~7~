@@ -1,0 +1,145 @@
+#include <18F25K22.h>
+#device ADC=10
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN,IESO
+#use delay(clock=20000000)
+
+#use rs232(stream=COM_1, baud=9600, parity=N, xmit=PIN_C6, rcv=PIN_C7, bits=8)
+
+// -------- OUTPUT PINS --------
+#define V1 PIN_B3
+#define V2 PIN_B2
+#define V3 PIN_B0
+#define V4 PIN_B1
+#define V5 PIN_B6
+#define V6 PIN_B5
+#define V7 PIN_B7
+#define V8 PIN_B4
+#define SIGLED PIN_C3
+
+// -------- GLOBALS --------
+#define RX_SIZE 80
+
+char RxBuffer[RX_SIZE];
+int8 Index = 0;
+int1 RX_Command_Ready = 0;
+int1 txflg = 0;
+
+// -------- UART INTERRUPT --------
+#int_RDA
+void RDA_isr(void)
+{
+   char c = getc(COM_1);
+
+   if(c == '$')
+   {
+      Index = 0;
+   }
+
+   if(Index < RX_SIZE-1)
+   {
+      RxBuffer[Index++] = c;
+   }
+
+   if(c == '#')
+   {
+      RxBuffer[Index] = '\0';
+      RX_Command_Ready = 1;
+      Index = 0;
+   }
+
+   if(c == 'a')
+   {
+      txflg = 1;
+   }
+}
+
+// -------- SIMPLE PARSER --------
+void process_packet()
+{
+   int8 i = 0;
+   int8 valve_number = 0;
+   int8 valve_state = 0;
+   int1 expect_state = 0;
+
+   // Check header
+   if(RxBuffer[0] != '$') return;
+   if(RxBuffer[1] != 'M') return;
+
+   // Start after "$M,"
+   i = 3;
+
+   while(RxBuffer[i] != '#' && RxBuffer[i] != '\0')
+   {
+      if(RxBuffer[i] >= '1' && RxBuffer[i] <= '8')
+      {
+         valve_number = RxBuffer[i] - '0';
+         expect_state = 1;
+      }
+      else if((RxBuffer[i] == '0' || RxBuffer[i] == '1') && expect_state)
+      {
+         valve_state = RxBuffer[i] - '0';
+
+         switch(valve_number)
+         {
+            case 1: output_bit(V1, valve_state); break;
+            case 2: output_bit(V2, valve_state); break;
+            case 3: output_bit(V3, valve_state); break;
+            case 4: output_bit(V4, valve_state); break;
+            case 5: output_bit(V5, valve_state); break;
+            case 6: output_bit(V6, valve_state); break;
+            case 7: output_bit(V7, valve_state); break;
+            case 8: output_bit(V8, valve_state); break;
+         }
+
+         expect_state = 0;
+      }
+
+      i++;
+   }
+}
+
+// -------- SEND STATUS --------
+void txvalve()
+{
+   output_high(SIGLED);
+
+   printf("$A,");
+   printf("1,%u,", input(V1));
+   printf("2,%u,", input(V2));
+   printf("3,%u,", input(V3));
+   printf("4,%u,", input(V4));
+   printf("5,%u,", input(V5));
+   printf("6,%u,", input(V6));
+   printf("7,%u,", input(V7));
+   printf("8,%u#", input(V8));
+
+   output_low(SIGLED);
+   txflg = 0;
+}
+
+// -------- MAIN --------
+void main()
+{
+   set_tris_b(0x00);              // All PORTB output
+   set_tris_c(0b10000000);        // RC7 input (RX), RC6 output (TX)
+
+   output_b(0x00);
+   output_low(SIGLED);
+
+   enable_interrupts(INT_RDA);
+   enable_interrupts(GLOBAL);
+
+   while(TRUE)
+   {
+      if(RX_Command_Ready)
+      {
+         RX_Command_Ready = 0;
+         process_packet();
+      }
+
+      if(txflg)
+      {
+         txvalve();
+      }
+   }
+}

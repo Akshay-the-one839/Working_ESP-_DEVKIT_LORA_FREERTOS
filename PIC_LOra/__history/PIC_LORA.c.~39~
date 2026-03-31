@@ -1,0 +1,595 @@
+#include <18F25K22.h>
+#device ADC=10
+#INCLUDE <stdlib.h>
+
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN
+#fuses IESO
+#use delay(xtal=20MHz, clock=20MHz)
+#byte clock_source=getenv("clock")
+
+#use rs232(stream=COM_1,baud=9600,parity=N,xmit=PIN_C6,rcv=PIN_C7,bits=8)
+#include "internal_eeprom.c"
+
+// ------------------------------------------------------------------
+// Pin definitions
+// ------------------------------------------------------------------
+#define V1      PIN_B0
+#define V2      PIN_B1
+#define V3      PIN_B2
+#define V4      PIN_B3
+#define V5      PIN_B4
+#define V6      PIN_B5
+#define V7      PIN_B6
+#define V8      PIN_B7
+#define SIGLED  PIN_C3
+
+// ------------------------------------------------------------------
+// Slave ID — change per board: 'A', 'B', 'C' ...
+// ------------------------------------------------------------------
+#define MY_ID  'A'
+
+// ------------------------------------------------------------------
+// VALVE ON DELAY (seconds)
+// OFF command is held pending for this many seconds after a valve
+// turns ON (inrush / debounce protection).
+// ------------------------------------------------------------------
+#define VALVE_ON_DELAY_S  2
+
+// ------------------------------------------------------------------
+// PACKET FORMAT (master transmits, no '#' sentinel variant):
+//
+//   [MY_ID] 1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*
+//
+// Byte count after MY_ID header, counting every character:
+//
+//   "1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*"
+//    ^ byte 0                          ^ byte 34
+//
+//   Total = 35 bytes (indices 0..34).
+//   The final '*' is at index 34, so break when idx >= 35 && x=='*'.
+//
+// If master sends '#' sentinel instead, set USE_HASH_SENTINEL 1
+// and append '#' after the last '*' on the master side.
+// ------------------------------------------------------------------
+#define USE_HASH_SENTINEL  0    // 1 = master appends '#' after last '*'
+                                // 0 = fixed 35-byte payload (master zero-pads time to 2 digits)
+
+// ------------------------------------------------------------------
+// EEPROM ADDRESS MAP
+//   0x00        Magic marker (0xA5)
+//   0x01..0x08  Valve 1..8 state ('0' or '1')
+//   0x09..0x10  vanoflg 1..8 (0 or 1)
+//   0x28 (40)   hr  (wall clock)
+//   0x29 (41)   min (wall clock)
+// ------------------------------------------------------------------
+#define EEPROM_MAGIC_ADDR    0x00
+#define EEPROM_MAGIC_VALUE   0xA5
+#define EEPROM_STATE_BASE    0x01
+#define EEPROM_FLAG_BASE     0x09
+
+// ------------------------------------------------------------------
+// UART hardware register bits
+// ------------------------------------------------------------------
+#byte RCSTA = 0xFAB
+#bit  OERR  = RCSTA.1
+#bit  FERR  = RCSTA.2
+#bit  CREN  = RCSTA.4
+
+// ------------------------------------------------------------------
+// Valve state variables ('0'=OFF, '1'=ON as ASCII)
+// ------------------------------------------------------------------
+char state1='0', state2='0', state3='0', state4='0';
+char state5='0', state6='0', state7='0', state8='0';
+
+// vanoflg: tracks whether the ON-delay guard is active for each valve.
+// 0 = valve is OFF (or OFF delay has expired)
+// 1 = valve was turned ON and ON-delay timer is running / expired
+int1 vanoflg1=0, vanoflg2=0, vanoflg3=0, vanoflg4=0;
+int1 vanoflg5=0, vanoflg6=0, vanoflg7=0, vanoflg8=0;
+
+int1 eeprom_valve_dirty = 0;
+
+// Per-valve ON-delay countdown timers (decremented each second by ISR)
+volatile int8 v1_timer=0, v2_timer=0, v3_timer=0, v4_timer=0;
+volatile int8 v5_timer=0, v6_timer=0, v7_timer=0, v8_timer=0;
+
+// ------------------------------------------------------------------
+// RX / packet variables
+// ------------------------------------------------------------------
+int1  RX_Command_Ready = 0;
+char  RxBuffer[60];
+char  TimeBuffer[9];
+char  vno1,vno2,vno3,vno4,vno5,vno6,vno7,vno8;
+
+// ------------------------------------------------------------------
+// Timer1 / wall-clock variables
+// ------------------------------------------------------------------
+int8  overflow_count = 0;
+int8  sec=0, min=0, hr=0;
+int8  bwminv1=0, bwminv2=0;
+unsigned int16 eeprom_base_address = 0;
+volatile int1 txflg = 0;
+
+// ------------------------------------------------------------------
+// is_valid_state(c) — returns 1 only for '0' or '1'
+// ------------------------------------------------------------------
+int1 is_valid_state(char c)
+{
+    return (c == '0' || c == '1');
+}
+
+// ------------------------------------------------------------------
+// apply_valve(pin, state_char, vanoflg_ptr, timer_ptr)
+//
+// Unified valve apply logic. Replaces the repeated if/if blocks in
+// the main loop. Handles both ON and OFF including the timer guard.
+//
+//   ON  command: always drives pin HIGH and sets vanoflg + timer,
+//                even if already ON (ensures GPIO is correct after
+//                boot restore).
+//
+//   OFF command: drives pin LOW only when vanoflg==1 AND timer==0
+//                (timer guard expired). If timer still running the
+//                OFF is deferred — the pending-OFF check in main
+//                loop will catch it once the timer expires.
+// ------------------------------------------------------------------
+void apply_valve(int32 pin, char st, int1 *flg, volatile int8 *tmr)
+{
+    if (st == '1')
+    {
+        // Always drive ON — do not gate on vanoflg so that boot
+        // restore + re-command always drives the GPIO correctly.
+        output_high(pin);
+        *flg = 1;
+        *tmr = VALVE_ON_DELAY_S;
+    }
+    else  // st == '0'
+    {
+        if (*flg == 1 && *tmr == 0)
+        {
+            output_low(pin);
+            *flg = 0;
+        }
+        // If *tmr > 0: OFF is pending — main loop pending-OFF section
+        // will apply it once the timer reaches zero.
+    }
+}
+
+// ------------------------------------------------------------------
+// save_valve_states_to_eeprom()
+// Validates all 8 states before writing — corrupt data is rejected.
+// ------------------------------------------------------------------
+void save_valve_states_to_eeprom(void)
+{
+    if (!is_valid_state(state1) || !is_valid_state(state2) ||
+        !is_valid_state(state3) || !is_valid_state(state4) ||
+        !is_valid_state(state5) || !is_valid_state(state6) ||
+        !is_valid_state(state7) || !is_valid_state(state8))
+    {
+        printf("[EEPROM] Save skipped — invalid state data\r\n");
+        return;
+    }
+
+    write_eeprom(EEPROM_MAGIC_ADDR,    EEPROM_MAGIC_VALUE);
+
+    write_eeprom(EEPROM_STATE_BASE + 0, (int8)state1);
+    write_eeprom(EEPROM_STATE_BASE + 1, (int8)state2);
+    write_eeprom(EEPROM_STATE_BASE + 2, (int8)state3);
+    write_eeprom(EEPROM_STATE_BASE + 3, (int8)state4);
+    write_eeprom(EEPROM_STATE_BASE + 4, (int8)state5);
+    write_eeprom(EEPROM_STATE_BASE + 5, (int8)state6);
+    write_eeprom(EEPROM_STATE_BASE + 6, (int8)state7);
+    write_eeprom(EEPROM_STATE_BASE + 7, (int8)state8);
+
+    write_eeprom(EEPROM_FLAG_BASE + 0, (int8)vanoflg1);
+    write_eeprom(EEPROM_FLAG_BASE + 1, (int8)vanoflg2);
+    write_eeprom(EEPROM_FLAG_BASE + 2, (int8)vanoflg3);
+    write_eeprom(EEPROM_FLAG_BASE + 3, (int8)vanoflg4);
+    write_eeprom(EEPROM_FLAG_BASE + 4, (int8)vanoflg5);
+    write_eeprom(EEPROM_FLAG_BASE + 5, (int8)vanoflg6);
+    write_eeprom(EEPROM_FLAG_BASE + 6, (int8)vanoflg7);
+    write_eeprom(EEPROM_FLAG_BASE + 7, (int8)vanoflg8);
+
+    printf("[EEPROM] States saved\r\n");
+}
+
+// ------------------------------------------------------------------
+// load_valve_states_from_eeprom()
+// Validates each byte on read — corrupt byte defaults to '0' (OFF).
+// ------------------------------------------------------------------
+void load_valve_states_from_eeprom(void)
+{
+    int8 magic = read_eeprom(EEPROM_MAGIC_ADDR);
+
+    if (magic != EEPROM_MAGIC_VALUE)
+    {
+        printf("[EEPROM] No saved state (magic=0x%02X) -> defaulting OFF\r\n", magic);
+
+        state1='0'; state2='0'; state3='0'; state4='0';
+        state5='0'; state6='0'; state7='0'; state8='0';
+        vanoflg1=0; vanoflg2=0; vanoflg3=0; vanoflg4=0;
+        vanoflg5=0; vanoflg6=0; vanoflg7=0; vanoflg8=0;
+
+        output_low(V1); output_low(V2); output_low(V3); output_low(V4);
+        output_low(V5); output_low(V6); output_low(V7); output_low(V8);
+
+        save_valve_states_to_eeprom();
+        return;
+    }
+
+    // Read and validate — corrupt byte safely defaults to '0'
+    char s1 = (char)read_eeprom(EEPROM_STATE_BASE + 0);
+    char s2 = (char)read_eeprom(EEPROM_STATE_BASE + 1);
+    char s3 = (char)read_eeprom(EEPROM_STATE_BASE + 2);
+    char s4 = (char)read_eeprom(EEPROM_STATE_BASE + 3);
+    char s5 = (char)read_eeprom(EEPROM_STATE_BASE + 4);
+    char s6 = (char)read_eeprom(EEPROM_STATE_BASE + 5);
+    char s7 = (char)read_eeprom(EEPROM_STATE_BASE + 6);
+    char s8 = (char)read_eeprom(EEPROM_STATE_BASE + 7);
+
+    state1 = is_valid_state(s1) ? s1 : '0';
+    state2 = is_valid_state(s2) ? s2 : '0';
+    state3 = is_valid_state(s3) ? s3 : '0';
+    state4 = is_valid_state(s4) ? s4 : '0';
+    state5 = is_valid_state(s5) ? s5 : '0';
+    state6 = is_valid_state(s6) ? s6 : '0';
+    state7 = is_valid_state(s7) ? s7 : '0';
+    state8 = is_valid_state(s8) ? s8 : '0';
+
+    vanoflg1 = (int1)read_eeprom(EEPROM_FLAG_BASE + 0);
+    vanoflg2 = (int1)read_eeprom(EEPROM_FLAG_BASE + 1);
+    vanoflg3 = (int1)read_eeprom(EEPROM_FLAG_BASE + 2);
+    vanoflg4 = (int1)read_eeprom(EEPROM_FLAG_BASE + 3);
+    vanoflg5 = (int1)read_eeprom(EEPROM_FLAG_BASE + 4);
+    vanoflg6 = (int1)read_eeprom(EEPROM_FLAG_BASE + 5);
+    vanoflg7 = (int1)read_eeprom(EEPROM_FLAG_BASE + 6);
+    vanoflg8 = (int1)read_eeprom(EEPROM_FLAG_BASE + 7);
+
+    // Drive GPIO to match restored state
+    if (state1 == '1') output_high(V1); else output_low(V1);
+    if (state2 == '1') output_high(V2); else output_low(V2);
+    if (state3 == '1') output_high(V3); else output_low(V3);
+    if (state4 == '1') output_high(V4); else output_low(V4);
+    if (state5 == '1') output_high(V5); else output_low(V5);
+    if (state6 == '1') output_high(V6); else output_low(V6);
+    if (state7 == '1') output_high(V7); else output_low(V7);
+    if (state8 == '1') output_high(V8); else output_low(V8);
+
+    printf("[EEPROM] States restored: %c%c%c%c%c%c%c%c\r\n",
+           state1,state2,state3,state4,state5,state6,state7,state8);
+}
+
+// ------------------------------------------------------------------
+// Timer1 setup
+// At 20 MHz with /8 prescaler: 625 kHz tick.
+// Reload 34286 -> 31250 ticks * 1.6 us = 50 ms per overflow.
+// 20 overflows = 1 second.
+// ------------------------------------------------------------------
+void setup_timer1_for_1s_interrupt(void)
+{
+    setup_timer_1(T1_INTERNAL | T1_DIV_BY_8);
+    set_timer1(34286);
+    enable_interrupts(INT_TIMER1);
+}
+
+// ------------------------------------------------------------------
+// Timer1 ISR — fires every ~50 ms, produces 1-second events
+// ------------------------------------------------------------------
+#INT_TIMER1
+void timer1_isr(void)
+{
+    overflow_count++;
+    set_timer1(34286);
+
+    if (overflow_count >= 20)
+    {
+        overflow_count = 0;
+        sec++;
+
+        if (v1_timer > 0) v1_timer--;
+        if (v2_timer > 0) v2_timer--;
+        if (v3_timer > 0) v3_timer--;
+        if (v4_timer > 0) v4_timer--;
+        if (v5_timer > 0) v5_timer--;
+        if (v6_timer > 0) v6_timer--;
+        if (v7_timer > 0) v7_timer--;
+        if (v8_timer > 0) v8_timer--;
+
+        if (sec >= 59)
+        {
+            sec = 0;
+            min++;
+            bwminv1++; if (bwminv1 >= 11) bwminv1 = 0;
+            bwminv2++; if (bwminv2 >= 11) bwminv2 = 0;
+
+            write_eeprom(eeprom_base_address + 40, hr);
+            write_eeprom(eeprom_base_address + 41, min);
+
+            if (min >= 59) { min = 0; hr++; }
+            if (hr  >= 24)   hr = 0;
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// EEPROM helpers (retained from original)
+// ------------------------------------------------------------------
+void store_byte(unsigned int16 address, unsigned char value)
+{
+    if (address < 256) write_eeprom(address, value);
+}
+unsigned char retrieve_byte(unsigned int16 address)
+{
+    if (address < 256) return read_eeprom(address);
+    return 0;
+}
+
+// ------------------------------------------------------------------
+// RDA ISR — collect one LoRa packet
+//
+// PACKET (no sentinel variant, USE_HASH_SENTINEL=0):
+//   [MY_ID] 1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*
+//
+// Byte index map (payload after MY_ID, 0-based):
+//   0:'1' 1:'*' 2:'0' 3:'*' 4:'2' 5:'*' 6:'0' 7:'*'
+//   8:'3' 9:'*' 10:'0' 11:'*' 12:'4' 13:'*' 14:'0' 15:'*'
+//   16:'5' 17:'*' 18:'0' 19:'*' 20:'6' 21:'*' 22:'0' 23:'*'
+//   24:'7' 25:'*' 26:'0' 27:'*' 28:'8' 29:'*' 30:'0' 31:'*'
+//   32:'0' 33:'0' 34:'*'   <- time field "00" + terminator
+//
+// Total payload = 35 bytes (idx 0..34).
+// Break when idx >= 35 AND x == '*'  (the '*' at index 34).
+//
+// PACKET (sentinel variant, USE_HASH_SENTINEL=1):
+//   [MY_ID] 1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*#
+//   Break on '#'.
+// ------------------------------------------------------------------
+#int_RDA
+void RDA_isr(void)
+{
+    if (OERR) { CREN = 0; CREN = 1; return; }
+    if (FERR) { getc(COM_1); return; }
+
+    char first = getc(COM_1);
+    if (first != MY_ID) return;     // not our packet
+
+    int8 idx = 0;
+    char x;
+
+#if USE_HASH_SENTINEL
+
+    // Strategy 1: '#' end-of-packet sentinel
+    // Master sends: "1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*#"
+    while (idx < 55)
+    {
+        x = getc(COM_1);
+        if (x == '#') break;        // sentinel found — stop cleanly
+        RxBuffer[idx] = x;
+        idx++;
+    }
+
+#else
+
+    // Strategy 2: fixed 35-byte payload (time field must be zero-padded to 2 digits)
+    // Master sends: "1*0*2*0*3*0*4*0*5*0*6*0*7*0*8*0*00*"
+    //               idx:0                              34
+    // Break when we have read all 35 bytes (idx reaches 35 after
+    // storing byte 34) AND the byte just stored was '*'.
+    while (idx < 55)
+    {
+        x = getc(COM_1);
+        RxBuffer[idx] = x;
+        idx++;
+        // idx is now the count of bytes read (1-based).
+        // The final '*' is the 35th byte, so idx==35 when we store it.
+        if (idx >= 35 && x == '*') break;
+    }
+
+#endif
+
+    RxBuffer[idx] = '\0';
+    RX_Command_Ready = 1;
+}
+
+// ------------------------------------------------------------------
+// txvalve() — send ACK to master (5 retries)
+// ------------------------------------------------------------------
+void txvalve(void)
+{
+    int8 k;
+    for (k = 0; k < 5; k++)
+    {
+        output_high(SIGLED);
+        fprintf(COM_1, "$");
+        fprintf(COM_1, "%c,", MY_ID);
+        fprintf(COM_1, "1,%c,", state1);
+        fprintf(COM_1, "2,%c,", state2);
+        fprintf(COM_1, "3,%c,", state3);
+        fprintf(COM_1, "4,%c,", state4);
+        fprintf(COM_1, "5,%c,", state5);
+        fprintf(COM_1, "6,%c,", state6);
+        fprintf(COM_1, "7,%c,", state7);
+        fprintf(COM_1, "8,%c,", state8);
+        fprintf(COM_1, "\n");
+        delay_ms(100);
+    }
+    output_low(SIGLED);
+    txflg = 0;
+}
+
+// ------------------------------------------------------------------
+// parse_packet()
+//
+// Tokenises RxBuffer on '*'. Parses into temporaries first, then
+// validates all tokens before committing to globals. A corrupt or
+// short packet is discarded entirely — globals retain last good state.
+//
+// Validation rules:
+//   - Must produce at least 16 tokens (8 valve numbers + 8 states)
+//   - Valve number tokens must be '1'..'8' in exact order
+//   - State tokens must be '0' or '1'
+// ------------------------------------------------------------------
+void parse_packet(void)
+{
+    char *ptr;
+    int   index = 0;
+    char  sep[] = "*";
+
+    char t_vno1,t_vno2,t_vno3,t_vno4,t_vno5,t_vno6,t_vno7,t_vno8;
+    char t_s1,t_s2,t_s3,t_s4,t_s5,t_s6,t_s7,t_s8;
+    char t_time[9];
+
+    // initialise time buffer
+    t_time[0] = '0'; t_time[1] = '0'; t_time[2] = '\0';
+
+    ptr = strtok(RxBuffer, sep);
+
+    while (ptr != NULL && index <= 16)
+    {
+        switch (index)
+        {
+            case  0: t_vno1 = ptr[0]; break;
+            case  1: t_s1   = ptr[0]; break;
+            case  2: t_vno2 = ptr[0]; break;
+            case  3: t_s2   = ptr[0]; break;
+            case  4: t_vno3 = ptr[0]; break;
+            case  5: t_s3   = ptr[0]; break;
+            case  6: t_vno4 = ptr[0]; break;
+            case  7: t_s4   = ptr[0]; break;
+            case  8: t_vno5 = ptr[0]; break;
+            case  9: t_s5   = ptr[0]; break;
+            case 10: t_vno6 = ptr[0]; break;
+            case 11: t_s6   = ptr[0]; break;
+            case 12: t_vno7 = ptr[0]; break;
+            case 13: t_s7   = ptr[0]; break;
+            case 14: t_vno8 = ptr[0]; break;
+            case 15: t_s8   = ptr[0]; break;
+            case 16: strncpy(t_time, ptr, 8); t_time[8] = '\0'; break;
+        }
+        ptr = strtok(NULL, sep);
+        index++;
+    }
+
+    // Need at least 16 tokens
+    if (index < 16)
+    {
+        printf("[PARSE] Short packet (%d tokens) discarded\r\n", index);
+        return;
+    }
+
+    // Valve numbers must be '1'..'8' in order
+    if (t_vno1!='1' || t_vno2!='2' || t_vno3!='3' || t_vno4!='4' ||
+        t_vno5!='5' || t_vno6!='6' || t_vno7!='7' || t_vno8!='8')
+    {
+        printf("[PARSE] Valve number mismatch discarded\r\n");
+        printf("  vno: %c %c %c %c %c %c %c %c\r\n",
+               t_vno1,t_vno2,t_vno3,t_vno4,t_vno5,t_vno6,t_vno7,t_vno8);
+        return;
+    }
+
+    // States must be '0' or '1'
+    if (!is_valid_state(t_s1) || !is_valid_state(t_s2) ||
+        !is_valid_state(t_s3) || !is_valid_state(t_s4) ||
+        !is_valid_state(t_s5) || !is_valid_state(t_s6) ||
+        !is_valid_state(t_s7) || !is_valid_state(t_s8))
+    {
+        printf("[PARSE] Invalid state char discarded\r\n");
+        printf("  states: %c%c%c%c%c%c%c%c\r\n",
+               t_s1,t_s2,t_s3,t_s4,t_s5,t_s6,t_s7,t_s8);
+        return;
+    }
+
+    // All valid — commit to globals
+    vno1=t_vno1; vno2=t_vno2; vno3=t_vno3; vno4=t_vno4;
+    vno5=t_vno5; vno6=t_vno6; vno7=t_vno7; vno8=t_vno8;
+    state1=t_s1; state2=t_s2; state3=t_s3; state4=t_s4;
+    state5=t_s5; state6=t_s6; state7=t_s7; state8=t_s8;
+    strcpy(TimeBuffer, t_time);
+
+    printf("\r\n=== Parsed Packet ===\r\n");
+    printf("SlaveID: %c\r\n", MY_ID);
+    printf("Time   : %s\r\n", TimeBuffer);
+    printf("V1:%c S:%c  V2:%c S:%c  V3:%c S:%c  V4:%c S:%c\r\n",
+           vno1,state1, vno2,state2, vno3,state3, vno4,state4);
+    printf("V5:%c S:%c  V6:%c S:%c  V7:%c S:%c  V8:%c S:%c\r\n",
+           vno5,state5, vno6,state6, vno7,state7, vno8,state8);
+    printf("=====================\r\n");
+}
+
+// ------------------------------------------------------------------
+// main()
+// ------------------------------------------------------------------
+void main(void)
+{
+    output_b(0x00);
+    set_tris_a(0xFF);
+    set_tris_b(0xCF);
+    set_tris_c(0xB8);
+
+    setup_timer1_for_1s_interrupt();
+
+    enable_interrupts(INT_RDA);
+    enable_interrupts(GLOBAL);
+
+    load_valve_states_from_eeprom();
+
+    while (true)
+    {
+        // ------------------------------------------------------------
+        // Process received packet
+        // ------------------------------------------------------------
+        if (RX_Command_Ready == 1)
+        {
+            RX_Command_Ready = 0;
+
+            // parse_packet() only updates globals if packet is valid
+            parse_packet();
+
+            // Apply valve outputs using unified helper.
+            // apply_valve() always drives ON if state=='1', regardless
+            // of vanoflg — this fixes the "only 3 valves turn on" bug
+            // where the old code silently skipped valves already flagged.
+            apply_valve(V1, state1, &vanoflg1, &v1_timer);
+            apply_valve(V2, state2, &vanoflg2, &v2_timer);
+            apply_valve(V3, state3, &vanoflg3, &v3_timer);
+            apply_valve(V4, state4, &vanoflg4, &v4_timer);
+            apply_valve(V5, state5, &vanoflg5, &v5_timer);
+            apply_valve(V6, state6, &vanoflg6, &v6_timer);
+            apply_valve(V7, state7, &vanoflg7, &v7_timer);
+            apply_valve(V8, state8, &vanoflg8, &v8_timer);
+
+            // Persist validated states to EEPROM
+            save_valve_states_to_eeprom();
+
+            // ACK to master
+            txflg = 1;
+            txvalve();
+
+        } // end RX_Command_Ready
+
+        // ------------------------------------------------------------
+        // Pending OFF check
+        // If OFF arrived while ON-delay timer was counting, it was
+        // deferred. Apply it here once the timer reaches zero.
+        // ------------------------------------------------------------
+        if (vanoflg1==1 && v1_timer==0 && state1=='0') { output_low(V1); vanoflg1=0; eeprom_valve_dirty=1; }
+        if (vanoflg2==1 && v2_timer==0 && state2=='0') { output_low(V2); vanoflg2=0; eeprom_valve_dirty=1; }
+        if (vanoflg3==1 && v3_timer==0 && state3=='0') { output_low(V3); vanoflg3=0; eeprom_valve_dirty=1; }
+        if (vanoflg4==1 && v4_timer==0 && state4=='0') { output_low(V4); vanoflg4=0; eeprom_valve_dirty=1; }
+        if (vanoflg5==1 && v5_timer==0 && state5=='0') { output_low(V5); vanoflg5=0; eeprom_valve_dirty=1; }
+        if (vanoflg6==1 && v6_timer==0 && state6=='0') { output_low(V6); vanoflg6=0; eeprom_valve_dirty=1; }
+        if (vanoflg7==1 && v7_timer==0 && state7=='0') { output_low(V7); vanoflg7=0; eeprom_valve_dirty=1; }
+        if (vanoflg8==1 && v8_timer==0 && state8=='0') { output_low(V8); vanoflg8=0; eeprom_valve_dirty=1; }
+
+        output_low(SIGLED);
+
+        // Batch EEPROM write — only when a pending-OFF fired
+        if (eeprom_valve_dirty)
+        {
+            eeprom_valve_dirty = 0;
+            save_valve_states_to_eeprom();
+        }
+
+        delay_ms(10);
+    }
+}

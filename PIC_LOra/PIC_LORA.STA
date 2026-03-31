@@ -1,0 +1,86 @@
+
+ROM used:   6408/32768 (20%)
+            6408/32768 (20%) including unused fragments
+
+            1.7 Average locations per line
+            7.1 Average locations per statement
+
+RAM used:   132/1536 (9%) at main() level
+            183/1536 (12%) worst case
+
+Stack used: 4 worst case (3 in main + 1 for interrupts)
+Stack size: 31
+
+Lines Stmts  %   Files
+----- ----- ---  -----
+  629   397  44  PIC_LORA.c
+  989     0   0  ..\..\..\Program Files (x86)\PICC\Devices\18F25K22.h
+ 1351   359  40  ..\..\..\Program Files (x86)\PICC\Drivers\stdlib.h
+   32     0   0  ..\..\..\Program Files (x86)\PICC\Drivers\stddef.h
+  423   125  14  ..\..\..\Program Files (x86)\PICC\Drivers\string.h
+   28     0   0  ..\..\..\Program Files (x86)\PICC\Drivers\ctype.h
+  329    25   3  ..\..\..\Program Files (x86)\PICC\Drivers\internal_eeprom.c
+----- -----
+ 3781   906 Total
+
+Page ROM  %  RAM   Vol Diff  Functions:
+---- --- --- ---   --- ----  ----------
+0    144   1   11   318  6.5  strncpy
+0    114   1    9   288  6.0  strpbrk
+0    136   1    9   346  7.5  strspn
+0    164   1   10   475  7.2  strtok
+0     38   0    1             @delay_ms1
+0     22   0    1    53  2.3  is_valid_state
+0    882   7    1  1471  5.1  save_valve_states_to_eeprom
+0     46   0    0             @const1050
+0     34   0    2             @PSTRINGC_9600_31766_31767
+0     24   0    0             @const1052
+0    954   7    9  3974  7.0  load_valve_states_from_eeprom
+0     60   0    0             @const1055
+0     32   0    3             @PSTRINGCN_9600_31766_31767
+0     68   1    2             @PRINTF_X_9600_31766_31767
+0     46   0    0             @const1069
+0     20   0    0    65  1.6  setup_timer1_for_1s_interrupt
+0    236   2    2  1018  5.3  timer1_isr
+0    114   1    2   524  7.3  RDA_isr
+0    322   3    1   727  3.8  txvalve
+0   1420  11   30  4647 10.5  parse_packet
+0     70   1    0             @goto12243
+0     46   0    0             @const1116
+0     40   0    3             @DIV88
+0    180   1    6             @PRINTF_D_9600_31766_31767
+0     42   0    0             @const1123
+0     34   0    0             @const1124
+0     40   0    0    59  1.6  @const1125
+0     30   0    0   423  4.2  @const1126
+0     26   0    0  1499  5.6  @const1127
+0     14   0    0    88  2.8  @const1128
+0     14   0    0    76  2.4  @const1129
+0     40   0    2   358  5.7  @PSTRINGR_9600_31766_31767
+0     50   0    0   390  5.7  @const1131
+0     50   0    0   207  3.6  @const1132
+0     24   0    0   207  3.6  @const1133
+0    674   5    1  5012  4.5  MAIN
+ Inline         0  1500  9.5  @cinit1
+
+Program metrics:
+    Functions               23
+    Statements              906
+    Comments                1196
+    Volume (V)              36459
+    Difficulty (D)          121.3
+    Effort to implement (E) 4423244
+    Time to implement (T)   68 hours, 16 minutes
+    Est Delivered Bugs (B)  9
+    Cyclomatic Complexity   110
+    Maintainability (MI)    23
+
+ Segment     Used  Free
+-----------  ----  ----
+00000-00002     4  0  
+00004-00006     0  4  
+00008-000A0   154  0  
+000A2-07FFE  6250  26356  
+
+
+

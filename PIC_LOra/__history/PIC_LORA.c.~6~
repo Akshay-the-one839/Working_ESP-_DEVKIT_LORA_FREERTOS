@@ -1,0 +1,139 @@
+#include <18F25K22.h>
+#device ADC=10
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN,IESO
+#use delay(clock=20000000)
+
+#use rs232(stream=COM_1, baud=9600, parity=N, xmit=PIN_C6, rcv=PIN_C7, bits=8)
+
+// ------------------- OUTPUT PINS -------------------
+#define V1 PIN_B3
+#define V2 PIN_B2
+#define V3 PIN_B0
+#define V4 PIN_B1
+#define V5 PIN_B6
+#define V6 PIN_B5
+#define V7 PIN_B7
+#define V8 PIN_B4
+#define SIGLED PIN_C3
+
+// ------------------- GLOBALS -------------------
+#define RX_SIZE 80
+
+char RxBuffer[RX_SIZE];
+int8 Index = 0;
+int1 RX_Command_Ready = 0;
+int1 txflg = 0;
+
+// ------------------- SAFE UART ISR -------------------
+#int_RDA
+void RDA_isr(void)
+{
+   char c = getc(COM_1);
+
+   // Start of packet
+   if(c == '$')
+   {
+      Index = 0;
+   }
+
+   if(Index < RX_SIZE-1)
+   {
+      RxBuffer[Index++] = c;
+   }
+
+   // End of packet
+   if(c == '#')
+   {
+      RxBuffer[Index] = '\0';
+      RX_Command_Ready = 1;
+      Index = 0;
+   }
+
+   // status request
+   if(c == 'a')
+   {
+      txflg = 1;
+   }
+}
+
+// ------------------- PARSE FUNCTION -------------------
+void process_packet()
+{
+   int v[8];
+   int s[8];
+
+   // Expect format:
+   // $M,1,1,2,0,3,1,4,0,5,0,6,0,7,0,8,1#
+
+   if(RxBuffer[0] != '$') return;
+   if(RxBuffer[1] != 'M') return;
+
+   // Simple sscanf parsing
+   sscanf(RxBuffer,
+          "$M,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d#",
+          &v[0], &s[0],
+          &v[1], &s[1],
+          &v[2], &s[2],
+          &v[3], &s[3],
+          &v[4], &s[4],
+          &v[5], &s[5],
+          &v[6], &s[6],
+          &v[7], &s[7]);
+
+   // Control outputs
+   output_bit(V1, s[0]);
+   output_bit(V2, s[1]);
+   output_bit(V3, s[2]);
+   output_bit(V4, s[3]);
+   output_bit(V5, s[4]);
+   output_bit(V6, s[5]);
+   output_bit(V7, s[6]);
+   output_bit(V8, s[7]);
+}
+
+// ------------------- SEND STATUS -------------------
+void txvalve()
+{
+   output_high(SIGLED);
+
+   printf("$A,");
+   printf("1,%d,", input(V1));
+   printf("2,%d,", input(V2));
+   printf("3,%d,", input(V3));
+   printf("4,%d,", input(V4));
+   printf("5,%d,", input(V5));
+   printf("6,%d,", input(V6));
+   printf("7,%d,", input(V7));
+   printf("8,%d#", input(V8));
+
+   output_low(SIGLED);
+   txflg = 0;
+}
+
+// ------------------- MAIN -------------------
+void main()
+{
+   // All PORTB as output
+   set_tris_b(0x00);
+   set_tris_c(0b10000000);   // RC7 input, RC6 output
+
+   output_b(0x00);
+   output_low(SIGLED);
+
+   enable_interrupts(INT_RDA);
+   enable_interrupts(GLOBAL);
+
+   while(TRUE)
+   {
+      if(RX_Command_Ready)
+      {
+         RX_Command_Ready = 0;
+         process_packet();
+      }
+
+      if(txflg)
+      {
+         txvalve();
+      }
+   }
+}

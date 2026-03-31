@@ -1,0 +1,215 @@
+/*
+ * Valve Controller - STM32F103C8T6 (Blue Pill)
+ * Platform: PlatformIO + Arduino Framework
+ * Converted from PIC18F25K22 CCS C code
+ *
+ * ONLY CHANGED:
+ *  - RDA_isr ? serialEvent1() : now receives $M*A*...# format
+ *  - processCommand() : now parses *-separated tokens
+ *  - RxBuffer size increased to 96
+ * UNCHANGED:
+ *  - All pin definitions
+ *  - All vanoflg logic
+ *  - All valve ON/OFF logic
+ *  - txvalve(), updateRTC(), SIGLED behaviour
+ *  - VALVE_ON_DELAY_MS delays
+ */
+
+#include <Arduino.h>
+
+// --- Pin Definitions ---------------------------------------------------------
+#define V1 PIN_B3 
+#define V2 PIN_B2 
+#define V3 PIN_B0 
+#define V4 PIN_B1 
+#define V5 PIN_B6 
+#define V6 PIN_B5 
+#define V7 PIN_B7 
+#define V8 PIN_B4 
+
+#define SIGLED PIN_C3 
+
+#define VALVE_ON_DELAY_MS  500
+#define COM_1 Serial1
+
+// --- RX Buffer (increased from 33 to 96 for new packet format) ---------------
+#define RX_BUF_SIZE 96
+char    RxBuffer[RX_BUF_SIZE];
+uint8_t RxIndex = 0;
+
+volatile bool RX_Command_Ready = false;
+volatile bool txflg = false;
+
+// --- Valve States (unchanged from PIC) ---------------------------------------
+char state1='0', state2='0', state3='0', state4='0';
+char state5='0', state6='0', state7='0', state8='0';
+
+char vno1, vno2, vno3, vno4, vno5, vno6, vno7, vno8;
+char bw[2];
+
+bool vanoflg1=false, vanoflg2=false, vanoflg3=false, vanoflg4=false;
+bool vanoflg5=false, vanoflg6=false, vanoflg7=false, vanoflg8=false;
+
+// --- Software RTC (unchanged) -------------------------------------------------
+uint8_t sec=0, min_cnt=0, hr=0;
+
+void updateRTC() {
+    static uint32_t lastMs = 0;
+    uint32_t now = millis();
+    if ((now - lastMs) >= 1000) {
+        lastMs += 1000;
+        if (++sec >= 60) { sec = 0;
+            if (++min_cnt >= 60) { min_cnt = 0;
+                if (++hr >= 24) hr = 0;
+            }
+        }
+    }
+}
+
+// --- TX Valve (unchanged from PIC) -------------------------------------------
+void txvalve() {
+    for (int i2 = 0; i2 < 5; i2++) {
+        if (txflg) {
+            digitalWrite(SIGLED, LOW);
+            COM_1.print("$"); COM_1.print("A"); COM_1.print(",");
+            COM_1.print("1"); COM_1.print(","); COM_1.print(state1); COM_1.print(",");
+            COM_1.print("2"); COM_1.print(","); COM_1.print(state2); COM_1.print(",");
+            COM_1.print("3"); COM_1.print(","); COM_1.print(state3); COM_1.print(",");
+            COM_1.print("4"); COM_1.print(","); COM_1.print(state4); COM_1.print(",");
+            COM_1.print("5"); COM_1.print(","); COM_1.print(state5); COM_1.print(",");
+            COM_1.print("6"); COM_1.print(","); COM_1.print(state6); COM_1.print(",");
+            COM_1.print("7"); COM_1.print(","); COM_1.print(state7); COM_1.print(",");
+            COM_1.print("8"); COM_1.print(","); COM_1.print(state8); COM_1.print(",");
+        }
+        delay(200);
+    }
+    txflg = false;
+    digitalWrite(SIGLED, HIGH);
+}
+
+// --- CHANGED: UART ISR — collect until '#' ------------------------------------
+// Old PIC: waited for 'A' then read 34 bytes
+// New    : waits for '$' start, collects until '#' end marker
+void serialEvent1() {
+    while (COM_1.available()) {
+        char c = (char)COM_1.read();
+
+        if (c == '$') {
+            // new packet start — reset buffer
+            memset(RxBuffer, 0, RX_BUF_SIZE);
+            RxIndex = 0;
+            RxBuffer[RxIndex++] = c;
+
+        } else if (RxIndex > 0 && RxIndex < RX_BUF_SIZE - 1) {
+            RxBuffer[RxIndex++] = c;
+            if (c == '#') {
+                RxBuffer[RxIndex] = '\0';
+                RX_Command_Ready = true;
+                RxIndex = 0;
+            }
+        }
+
+        if (c == 'a') txflg = true;  // status request (same as PIC)
+    }
+}
+
+// --- CHANGED: Parse packet — now handles $M*A*...# format --------------------
+// Old PIC: read fixed positions from comma-separated buffer
+// New    : split by '*', extract vno and state from correct token positions
+//
+// Token map: [0]=$M [1]=A [2]=vno1 [3]=s1 [4]=unused [5]=timer
+//            [6]=vno2 [7]=s2 [8]=vno3 [9]=s3 ... [18]=vno8 [19]=s8
+void processCommand() {
+
+    // Zone A only — ignore Zone B packets
+    if (RxBuffer[3] != 'A') return;
+
+    // Null-terminate at '#'
+    char *ep = strchr(RxBuffer, '#');
+    if (!ep) return;
+    *ep = '\0';
+
+    // Tokenize by '*'
+    char  buf[RX_BUF_SIZE];
+    strncpy(buf, RxBuffer, RX_BUF_SIZE - 1);
+    char *tokens[22];
+    int   tcount = 0;
+    char *tok = strtok(buf, "*");
+    while (tok && tcount < 22) { tokens[tcount++] = tok; tok = strtok(NULL, "*"); }
+
+    if (tcount < 20) return;
+
+    // Extract valve numbers and states — same variable names as PIC
+    vno1=tokens[2][0];  state1=tokens[3][0];   // V1
+    vno2=tokens[6][0];  state2=tokens[7][0];   // V2
+    vno3=tokens[8][0];  state3=tokens[9][0];   // V3
+    vno4=tokens[10][0]; state4=tokens[11][0];  // V4
+    vno5=tokens[12][0]; state5=tokens[13][0];  // V5
+    vno6=tokens[14][0]; state6=tokens[15][0];  // V6
+    vno7=tokens[16][0]; state7=tokens[17][0];  // V7
+    vno8=tokens[18][0]; state8=tokens[19][0];  // V8
+
+    // -- Everything below is UNCHANGED from original PIC code -----------------
+
+    // V1
+    if (vno1=='1' && !vanoflg1 && state1=='1') { digitalWrite(V1, HIGH); vanoflg1=true; }
+    if (vno1=='1' &&  vanoflg1 && state1=='0') { digitalWrite(V1, LOW);  vanoflg1=false; }
+
+    // V2
+    if (vno2=='2' && !vanoflg2 && state2=='1') { digitalWrite(V2, HIGH); vanoflg2=true; }
+    if (vno2=='2' &&  vanoflg2 && state2=='0') { digitalWrite(V2, LOW);  vanoflg2=false; }
+
+    // V3
+    if (vno3=='3' && !vanoflg3 && state3=='1') { digitalWrite(V3, HIGH); vanoflg3=true; delay(VALVE_ON_DELAY_MS); }
+    if (vno3=='3' &&  vanoflg3 && state3=='0') { digitalWrite(V3, LOW);  vanoflg3=false; }
+
+    // V4
+    if (vno4=='4' && !vanoflg4 && state4=='1') { digitalWrite(V4, HIGH); vanoflg4=true; delay(VALVE_ON_DELAY_MS); }
+    if (vno4=='4' &&  vanoflg4 && state4=='0') { digitalWrite(V4, LOW);  vanoflg4=false; }
+
+    // V5
+    if (vno5=='5' && !vanoflg5 && state5=='1') { digitalWrite(V5, HIGH); vanoflg5=true; delay(VALVE_ON_DELAY_MS); }
+    if (vno5=='5' &&  vanoflg5 && state5=='0') { digitalWrite(V5, LOW);  vanoflg5=false; }
+
+    // V6
+    if (vno6=='6' && !vanoflg6 && state6=='1') { digitalWrite(V6, HIGH); vanoflg6=true; delay(VALVE_ON_DELAY_MS); }
+    if (vno6=='6' &&  vanoflg6 && state6=='0') { digitalWrite(V6, LOW);  vanoflg6=false; }
+
+    // V7
+    if (vno7=='7' && !vanoflg7 && state7=='1') { digitalWrite(V7, HIGH); vanoflg7=true; delay(VALVE_ON_DELAY_MS); }
+    if (vno7=='7' &&  vanoflg7 && state7=='0') { digitalWrite(V7, LOW);  vanoflg7=false; }
+
+    // V8
+    if (vno8=='8' && !vanoflg8 && state8=='1') { digitalWrite(V8, HIGH); vanoflg8=true; delay(VALVE_ON_DELAY_MS); }
+    if (vno8=='8' &&  vanoflg8 && state8=='0') { digitalWrite(V8, LOW);  vanoflg8=false; }
+}
+
+// --- Setup (unchanged) --------------------------------------------------------
+void setup() {
+    pinMode(V1, OUTPUT); digitalWrite(V1, LOW);
+    pinMode(V2, OUTPUT); digitalWrite(V2, LOW);
+    pinMode(V3, OUTPUT); digitalWrite(V3, LOW);
+    pinMode(V4, OUTPUT); digitalWrite(V4, LOW);
+    pinMode(V5, OUTPUT); digitalWrite(V5, LOW);
+    pinMode(V6, OUTPUT); digitalWrite(V6, LOW);
+    pinMode(V7, OUTPUT); digitalWrite(V7, LOW);
+    pinMode(V8, OUTPUT); digitalWrite(V8, LOW);
+    pinMode(SIGLED, OUTPUT); digitalWrite(SIGLED, HIGH);
+    COM_1.begin(9600);
+}
+
+// --- Loop (unchanged) ---------------------------------------------------------
+void loop() {
+    updateRTC();
+
+    if (RX_Command_Ready) {
+        RX_Command_Ready = false;
+        processCommand();
+    }
+
+    digitalWrite(SIGLED, HIGH);
+
+    if (txflg) txvalve();
+
+    delay(10);
+}

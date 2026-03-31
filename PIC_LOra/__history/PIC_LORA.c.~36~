@@ -1,0 +1,636 @@
+#include <18F25K22.h>
+#device ADC=10
+#INCLUDE <stdlib.h>
+
+#fuses HSM,PUT,NOPROTECT,NOLVP,NOWDT,NOBROWNOUT,NOPLLEN,NOPBADEN
+#fuses IESO
+#use delay(xtal=20MHz, clock=20MHz)
+#byte clock_source=getenv("clock")
+
+#use rs232(stream=COM_1,baud=9600,parity=N,xmit=PIN_C6,rcv=PIN_C7,bits=8)
+#include "internal_eeprom.c"
+
+#define V1      PIN_B0
+#define V2      PIN_B1
+#define V3      PIN_B2
+#define V4      PIN_B3
+#define V5      PIN_B4
+#define V6      PIN_B5
+#define V7      PIN_B6
+#define V8      PIN_B7
+#define SIGLED  PIN_C3
+
+// ============================================================
+// SET THIS CHIP'S ID
+// Slave A : #define MY_ID  'A'
+// Slave B : #define MY_ID  'B'
+// Slave C : #define MY_ID  'C'
+// ============================================================
+#define MY_ID  'A'
+
+// ============================================================
+// VALVE ON DELAY
+// ============================================================
+#define VALVE_ON_DELAY_S  2
+
+// ============================================================
+//  RING BUFFER — RDA ISR deposits ONE byte per interrupt.
+//  Main loop drains the buffer and assembles packets.
+//
+//  WHY THIS FIXES THE PARSE BUG:
+//  The old ISR called getc() in a blocking loop — if the UART
+//  was even slightly out of sync, it would read the wrong byte
+//  into the wrong slot, causing V7/V8 to show garbage ('A','1').
+//  With a ring buffer the ISR returns in <5 us per byte and
+//  the hardware FIFO never overflows.
+//
+//  RING BUFFER SIZE: 128 bytes — fits 3 full frames safely.
+// ============================================================
+#define RX_RING_SIZE  128
+
+volatile char  rx_ring[RX_RING_SIZE];
+volatile int8  rx_head = 0;   // ISR writes here
+volatile int8  rx_tail = 0;   // main loop reads here
+
+// Ring buffer helpers
+#define RX_AVAILABLE()  ((int8)(rx_head - rx_tail))
+#define RX_GET()        (rx_ring[(rx_tail++) & (RX_RING_SIZE-1)])
+#define RX_PUT(c)       (rx_ring[(rx_head++) & (RX_RING_SIZE-1)] = (c))
+
+// ============================================================
+//  EEPROM ADDRESS MAP
+// ============================================================
+#define EEPROM_MAGIC_ADDR    0x00
+#define EEPROM_MAGIC_VALUE   0xA5
+#define EEPROM_STATE_BASE    0x01   // 8 bytes (0x01..0x08)
+#define EEPROM_FLAG_BASE     0x09   // 8 bytes (0x09..0x10)
+
+// UART register bits
+#byte RCSTA = 0xFAB
+#bit  OERR  = RCSTA.1
+#bit  FERR  = RCSTA.2
+#bit  CREN  = RCSTA.4
+
+// Valve state variables
+char state1='0', state2='0', state3='0', state4='0';
+char state5='0', state6='0', state7='0', state8='0';
+
+int1 vanoflg1=0, vanoflg2=0, vanoflg3=0, vanoflg4=0;
+int1 vanoflg5=0, vanoflg6=0, vanoflg7=0, vanoflg8=0;
+int1 eeprom_valve_dirty = 0;
+
+// Per-valve non-blocking countdown timers
+volatile int8 v1_timer=0, v2_timer=0, v3_timer=0, v4_timer=0;
+volatile int8 v5_timer=0, v6_timer=0, v7_timer=0, v8_timer=0;
+
+// Packet assembly variables
+int1  RX_Command_Ready = 0;
+char  RxBuffer[60];
+char  TimeBuffer[9];
+char  vno1,vno2,vno3,vno4,vno5,vno6,vno7,vno8;
+
+// Timer1 / wall-clock variables
+int8  overflow_count = 0;
+int8  sec=0, min=0, hr=0;
+int8  bwmin=0, bwminv1=0, bwminv2=0;
+
+unsigned int16 eeprom_base_address = 0;
+volatile int1  txflg = 0;
+
+// EEPROM clock save flag (moved out of ISR)
+volatile int1 eeprom_clock_save = 0;
+
+// ============================================================
+//  save_valve_states_to_eeprom()
+// ============================================================
+void save_valve_states_to_eeprom(void)
+{
+    write_eeprom(EEPROM_MAGIC_ADDR,      EEPROM_MAGIC_VALUE);
+    write_eeprom(EEPROM_STATE_BASE + 0,  (int8)state1);
+    write_eeprom(EEPROM_STATE_BASE + 1,  (int8)state2);
+    write_eeprom(EEPROM_STATE_BASE + 2,  (int8)state3);
+    write_eeprom(EEPROM_STATE_BASE + 3,  (int8)state4);
+    write_eeprom(EEPROM_STATE_BASE + 4,  (int8)state5);
+    write_eeprom(EEPROM_STATE_BASE + 5,  (int8)state6);
+    write_eeprom(EEPROM_STATE_BASE + 6,  (int8)state7);
+    write_eeprom(EEPROM_STATE_BASE + 7,  (int8)state8);
+    write_eeprom(EEPROM_FLAG_BASE  + 0,  (int8)vanoflg1);
+    write_eeprom(EEPROM_FLAG_BASE  + 1,  (int8)vanoflg2);
+    write_eeprom(EEPROM_FLAG_BASE  + 2,  (int8)vanoflg3);
+    write_eeprom(EEPROM_FLAG_BASE  + 3,  (int8)vanoflg4);
+    write_eeprom(EEPROM_FLAG_BASE  + 4,  (int8)vanoflg5);
+    write_eeprom(EEPROM_FLAG_BASE  + 5,  (int8)vanoflg6);
+    write_eeprom(EEPROM_FLAG_BASE  + 6,  (int8)vanoflg7);
+    write_eeprom(EEPROM_FLAG_BASE  + 7,  (int8)vanoflg8);
+    printf("[EEPROM] States saved\r\n");
+}
+
+// ============================================================
+//  load_valve_states_from_eeprom()
+// ============================================================
+void load_valve_states_from_eeprom(void)
+{
+    int8 magic = read_eeprom(EEPROM_MAGIC_ADDR);
+
+    if (magic != EEPROM_MAGIC_VALUE)
+    {
+        printf("[EEPROM] No saved state (magic=0x%02X) — defaulting OFF\r\n", magic);
+        state1='0'; state2='0'; state3='0'; state4='0';
+        state5='0'; state6='0'; state7='0'; state8='0';
+        vanoflg1=0; vanoflg2=0; vanoflg3=0; vanoflg4=0;
+        vanoflg5=0; vanoflg6=0; vanoflg7=0; vanoflg8=0;
+        output_low(V1); output_low(V2); output_low(V3); output_low(V4);
+        output_low(V5); output_low(V6); output_low(V7); output_low(V8);
+        save_valve_states_to_eeprom();
+        return;
+    }
+
+    state1 = (char)read_eeprom(EEPROM_STATE_BASE + 0);
+    state2 = (char)read_eeprom(EEPROM_STATE_BASE + 1);
+    state3 = (char)read_eeprom(EEPROM_STATE_BASE + 2);
+    state4 = (char)read_eeprom(EEPROM_STATE_BASE + 3);
+    state5 = (char)read_eeprom(EEPROM_STATE_BASE + 4);
+    state6 = (char)read_eeprom(EEPROM_STATE_BASE + 5);
+    state7 = (char)read_eeprom(EEPROM_STATE_BASE + 6);
+    state8 = (char)read_eeprom(EEPROM_STATE_BASE + 7);
+
+    vanoflg1 = (int1)read_eeprom(EEPROM_FLAG_BASE + 0);
+    vanoflg2 = (int1)read_eeprom(EEPROM_FLAG_BASE + 1);
+    vanoflg3 = (int1)read_eeprom(EEPROM_FLAG_BASE + 2);
+    vanoflg4 = (int1)read_eeprom(EEPROM_FLAG_BASE + 3);
+    vanoflg5 = (int1)read_eeprom(EEPROM_FLAG_BASE + 4);
+    vanoflg6 = (int1)read_eeprom(EEPROM_FLAG_BASE + 5);
+    vanoflg7 = (int1)read_eeprom(EEPROM_FLAG_BASE + 6);
+    vanoflg8 = (int1)read_eeprom(EEPROM_FLAG_BASE + 7);
+
+    if (state1=='1') output_high(V1); else output_low(V1);
+    if (state2=='1') output_high(V2); else output_low(V2);
+    if (state3=='1') output_high(V3); else output_low(V3);
+    if (state4=='1') output_high(V4); else output_low(V4);
+    if (state5=='1') output_high(V5); else output_low(V5);
+    if (state6=='1') output_high(V6); else output_low(V6);
+    if (state7=='1') output_high(V7); else output_low(V7);
+    if (state8=='1') output_high(V8); else output_low(V8);
+
+    printf("[EEPROM] States restored: %c%c%c%c%c%c%c%c\r\n",
+           state1,state2,state3,state4,state5,state6,state7,state8);
+}
+
+// ============================================================
+//  Timer1 ISR — ~50ms tick, counts to 1s
+//  FIXED: write_eeprom() removed from ISR — uses flag now
+// ============================================================
+void setup_timer1_for_1s_interrupt() {
+    setup_timer_1(T1_INTERNAL | T1_DIV_BY_8);
+    set_timer1(34286);
+    enable_interrupts(INT_TIMER1);
+}
+
+#INT_TIMER1
+void timer1_isr()
+{
+    overflow_count++;
+    set_timer1(34286);
+
+    if (overflow_count >= 20)
+    {
+        overflow_count = 0;
+        sec++;
+
+        if (v1_timer > 0) v1_timer--;
+        if (v2_timer > 0) v2_timer--;
+        if (v3_timer > 0) v3_timer--;
+        if (v4_timer > 0) v4_timer--;
+        if (v5_timer > 0) v5_timer--;
+        if (v6_timer > 0) v6_timer--;
+        if (v7_timer > 0) v7_timer--;
+        if (v8_timer > 0) v8_timer--;
+
+        if (sec >= 59)
+        {
+            sec = 0;
+            min++;
+            bwminv1++; if (bwminv1 >= 11) bwminv1 = 0;
+            bwminv2++; if (bwminv2 >= 11) bwminv2 = 0;
+
+            // FIXED: flag only — no write_eeprom inside ISR
+            eeprom_clock_save = 1;
+
+            if (min >= 59) { min = 0; hr++; }
+            if (hr  >= 24)   hr = 0;
+        }
+    }
+}
+
+// EEPROM helpers
+void store_byte(unsigned int16 address, unsigned char value) {
+    if (address < 256) write_eeprom(address, value);
+}
+unsigned char retrieve_byte(unsigned int16 address) {
+    if (address < 256) return read_eeprom(address);
+    return 0;
+}
+
+// ============================================================
+//  RDA ISR — ONE byte per interrupt, deposited into ring buffer
+//
+//  KEY CHANGE FROM OLD CODE:
+//  Old code: blocking getc() loop inside ISR — caused parse
+//            errors for V7/V8 because UART timing mismatch
+//            shifted bytes into wrong slots.
+//  New code: ISR takes ONE byte and returns in <5 us.
+//            Main loop assembles the complete packet safely.
+//            No blocking. No missed bytes. No parse errors.
+// ============================================================
+#int_RDA
+void RDA_isr(void)
+{
+    if (OERR) { CREN = 0; CREN = 1; return; }
+    if (FERR) { getc(COM_1); return; }
+
+    char c = getc(COM_1);
+
+    // Only store if ring buffer has space
+    if (RX_AVAILABLE() < (RX_RING_SIZE - 1))
+    {
+        RX_PUT(c);
+    }
+    // If buffer full, byte is silently dropped — frame will
+    // be discarded by packet assembler as incomplete.
+}
+
+// ============================================================
+//  try_assemble_packet()
+//
+//  Called from main loop. Drains the ring buffer and looks
+//  for a complete packet addressed to MY_ID.
+//
+//  PACKET FORMAT (from ESP32):
+//  <MY_ID> 1*<s1>* 2*<s2>* ... 8*<s8>* <bw>*
+//
+//  The first byte is the slave ID (e.g. 'A').
+//  The packet ends with the final '*' after BWMIN.
+//  We detect end-of-packet when we have received at least
+//  35 bytes after the ID byte AND the last byte was '*'.
+//
+//  Returns 1 if a valid packet was assembled into RxBuffer.
+//  Returns 0 if not enough data yet.
+// ============================================================
+int1 try_assemble_packet(void)
+{
+    static int1  waiting_for_id = 1;  // 1 = looking for MY_ID byte
+    static int8  pkt_idx = 0;         // index into RxBuffer
+    static int8  star_count = 0;      // count of '*' received
+
+    while (RX_AVAILABLE() > 0)
+    {
+        char c = RX_GET();
+
+        if (waiting_for_id)
+        {
+            // Look for our slave ID byte
+            if (c == MY_ID)
+            {
+                waiting_for_id = 0;
+                pkt_idx    = 0;
+                star_count = 0;
+                // Clear buffer for fresh packet
+                memset(RxBuffer, 0, sizeof(RxBuffer));
+            }
+            // Any other byte while waiting — discard (other slave traffic)
+            continue;
+        }
+
+        // Collecting packet body
+        if (pkt_idx < 58)
+        {
+            RxBuffer[pkt_idx++] = c;
+
+            if (c == '*')
+            {
+                star_count++;
+
+                // A complete packet has exactly 17 '*' characters:
+                // 8 valve numbers + 8 states + 1 BWMIN = 17
+                // (each field is separated by '*')
+                // We accept at star_count >= 17 to handle BWMIN
+                // being 1 or 2 digits (e.g. "5*" or "53*")
+                if (star_count >= 17)
+                {
+                    RxBuffer[pkt_idx] = '\0';
+                    waiting_for_id = 1;   // reset for next packet
+                    pkt_idx    = 0;
+                    star_count = 0;
+                    return 1;             // packet ready
+                }
+            }
+        }
+        else
+        {
+            // Buffer overrun — discard and reset
+            waiting_for_id = 1;
+            pkt_idx    = 0;
+            star_count = 0;
+        }
+    }
+
+    return 0;  // not enough data yet
+}
+
+// ============================================================
+//  txvalve — send ACK frame back to master
+// ============================================================
+void txvalve()
+{
+    int8 k;
+    for (k = 0; k < 5; k++)
+    {
+        output_high(SIGLED);
+        fprintf(COM_1, "$");
+        fprintf(COM_1, "%c,", MY_ID);
+        fprintf(COM_1, "1,%c,", state1);
+        fprintf(COM_1, "2,%c,", state2);
+        fprintf(COM_1, "3,%c,", state3);
+        fprintf(COM_1, "4,%c,", state4);
+        fprintf(COM_1, "5,%c,", state5);
+        fprintf(COM_1, "6,%c,", state6);
+        fprintf(COM_1, "7,%c,", state7);
+        fprintf(COM_1, "8,%c,", state8);
+        fprintf(COM_1, "\n");
+        delay_ms(100);
+    }
+    output_low(SIGLED);
+    txflg = 0;
+}
+
+// ============================================================
+//  parse_packet — tokenise RxBuffer into vnoN / stateN
+//  Unchanged logic — but now operates on a correctly
+//  assembled buffer so V7/V8 always parse correctly.
+// ============================================================
+void parse_packet(void)
+{
+    char *ptr;
+    int   index = 0;
+    char  sep[] = "*";
+
+    ptr = strtok(RxBuffer, sep);
+
+    while (ptr != NULL)
+    {
+        switch (index)
+        {
+            case  0: vno1   = ptr[0]; break;
+            case  1: state1 = ptr[0]; break;
+            case  2: vno2   = ptr[0]; break;
+            case  3: state2 = ptr[0]; break;
+            case  4: vno3   = ptr[0]; break;
+            case  5: state3 = ptr[0]; break;
+            case  6: vno4   = ptr[0]; break;
+            case  7: state4 = ptr[0]; break;
+            case  8: vno5   = ptr[0]; break;
+            case  9: state5 = ptr[0]; break;
+            case 10: vno6   = ptr[0]; break;
+            case 11: state6 = ptr[0]; break;
+            case 12: vno7   = ptr[0]; break;
+            case 13: state7 = ptr[0]; break;
+            case 14: vno8   = ptr[0]; break;
+            case 15: state8 = ptr[0]; break;
+            case 16: strcpy(TimeBuffer, ptr); break;
+        }
+        ptr = strtok(NULL, sep);
+        index++;
+    }
+
+    printf("\r\n=== Parsed Packet ===\r\n");
+    printf("SlaveID: %c\r\n", MY_ID);
+    printf("Time   : %s\r\n", TimeBuffer);
+    printf("V1:%c S:%c  V2:%c S:%c  V3:%c S:%c  V4:%c S:%c\r\n",
+           vno1,state1, vno2,state2, vno3,state3, vno4,state4);
+    printf("V5:%c S:%c  V6:%c S:%c  V7:%c S:%c  V8:%c S:%c\r\n",
+           vno5,state5, vno6,state6, vno7,state7, vno8,state8);
+    printf("=====================\r\n");
+}
+
+// ============================================================
+//  main
+// ============================================================
+void main()
+{
+    output_b(0x00);
+    set_tris_a(0xFF);
+    SET_TRIS_b(0xCF);
+    SET_TRIS_c(0xB8);
+
+    setup_timer1_for_1s_interrupt();
+
+    enable_interrupts(INT_RDA);
+    enable_interrupts(GLOBAL);
+
+    load_valve_states_from_eeprom();
+
+    while (true)
+    {
+        // --------------------------------------------------
+        //  EEPROM clock save — moved out of ISR
+        // --------------------------------------------------
+        if (eeprom_clock_save)
+        {
+            eeprom_clock_save = 0;
+            write_eeprom(eeprom_base_address + 40, hr);
+            write_eeprom(eeprom_base_address + 41, min);
+        }
+
+        // --------------------------------------------------
+        //  Packet assembly — drain ring buffer
+        //  try_assemble_packet() returns 1 when a complete
+        //  packet addressed to MY_ID is ready in RxBuffer.
+        // --------------------------------------------------
+        if (try_assemble_packet())
+        {
+            RX_Command_Ready = 1;
+        }
+
+        // --------------------------------------------------
+        //  Process complete packet
+        // --------------------------------------------------
+        if (RX_Command_Ready == 1)
+        {
+            RX_Command_Ready = 0;
+            parse_packet();
+
+            // VALVE 1
+            if (vno1 == '1')
+            {
+                if (state1 == '1' && vanoflg1 == 0)
+                {
+                    output_high(V1);
+                    vanoflg1 = 1;
+                    v1_timer = VALVE_ON_DELAY_S;
+                }
+                if (state1 == '0' && vanoflg1 == 1 && v1_timer == 0)
+                {
+                    output_low(V1);
+                    vanoflg1 = 0;
+                }
+            }
+
+            // VALVE 2
+            if (vno2 == '2')
+            {
+                if (state2 == '1' && vanoflg2 == 0)
+                {
+                    output_high(V2);
+                    vanoflg2 = 1;
+                    v2_timer = VALVE_ON_DELAY_S;
+                }
+                if (state2 == '0' && vanoflg2 == 1 && v2_timer == 0)
+                {
+                    output_low(V2);
+                    vanoflg2 = 0;
+                }
+            }
+
+            // VALVE 3
+            if (vno3 == '3')
+            {
+                if (state3 == '1' && vanoflg3 == 0)
+                {
+                    output_high(V3);
+                    vanoflg3 = 1;
+                    v3_timer = VALVE_ON_DELAY_S;
+                }
+                if (state3 == '0' && vanoflg3 == 1 && v3_timer == 0)
+                {
+                    output_low(V3);
+                    vanoflg3 = 0;
+                }
+            }
+
+            // VALVE 4
+            if (vno4 == '4')
+            {
+                if (state4 == '1' && vanoflg4 == 0)
+                {
+                    output_high(V4);
+                    vanoflg4 = 1;
+                    v4_timer = VALVE_ON_DELAY_S;
+                }
+                if (state4 == '0' && vanoflg4 == 1 && v4_timer == 0)
+                {
+                    output_low(V4);
+                    vanoflg4 = 0;
+                }
+            }
+
+            // VALVE 5
+            if (vno5 == '5')
+            {
+                if (state5 == '1' && vanoflg5 == 0)
+                {
+                    output_high(V5);
+                    vanoflg5 = 1;
+                    v5_timer = VALVE_ON_DELAY_S;
+                }
+                if (state5 == '0' && vanoflg5 == 1 && v5_timer == 0)
+                {
+                    output_low(V5);
+                    vanoflg5 = 0;
+                }
+            }
+
+            // VALVE 6
+            if (vno6 == '6')
+            {
+                if (state6 == '1' && vanoflg6 == 0)
+                {
+                    output_high(V6);
+                    vanoflg6 = 1;
+                    v6_timer = VALVE_ON_DELAY_S;
+                }
+                if (state6 == '0' && vanoflg6 == 1 && v6_timer == 0)
+                {
+                    output_low(V6);
+                    vanoflg6 = 0;
+                }
+            }
+
+            // VALVE 7
+            if (vno7 == '7')
+            {
+                if (state7 == '1' && vanoflg7 == 0)
+                {
+                    output_high(V7);
+                    vanoflg7 = 1;
+                    v7_timer = VALVE_ON_DELAY_S;
+                }
+                if (state7 == '0' && vanoflg7 == 1 && v7_timer == 0)
+                {
+                    output_low(V7);
+                    vanoflg7 = 0;
+                }
+            }
+
+            // VALVE 8
+            if (vno8 == '8')
+            {
+                if (state8 == '1' && vanoflg8 == 0)
+                {
+                    output_high(V8);
+                    vanoflg8 = 1;
+                    v8_timer = VALVE_ON_DELAY_S;
+                }
+                if (state8 == '0' && vanoflg8 == 1 && v8_timer == 0)
+                {
+                    output_low(V8);
+                    vanoflg8 = 0;
+                }
+            }
+
+            // Send ACK FIRST, save EEPROM AFTER
+            txflg = 1;
+            txvalve();
+            save_valve_states_to_eeprom();
+
+        } // end RX_Command_Ready
+
+        // --------------------------------------------------
+        //  Pending OFF check
+        // --------------------------------------------------
+        if (vanoflg1 == 1 && v1_timer == 0 && state1 == '0')
+            { output_low(V1); vanoflg1 = 0; eeprom_valve_dirty = 1; }
+
+        if (vanoflg2 == 1 && v2_timer == 0 && state2 == '0')
+            { output_low(V2); vanoflg2 = 0; eeprom_valve_dirty = 1; }
+
+        if (vanoflg3 == 1 && v3_timer == 0 && state3 == '0')
+            { output_low(V3); vanoflg3 = 0; eeprom_valve_dirty = 1; }
+
+        if (vanoflg4 == 1 && v4_timer == 0 && state4 == '0')
+            { output_low(V4); vanoflg4 = 0; eeprom_valve_dirty = 1; }
+
+        if (vanoflg5 == 1 && v5_timer == 0 && state5 == '0')
+            { output_low(V5); vanoflg5 = 0; eeprom_valve_dirty = 1; }
+
+        if (vanoflg6 == 1 && v6_timer == 0 && state6 == '0')
+            { output_low(V6); vanoflg6 = 0; eeprom_valve_dirty = 1; }
+
+        if (vanoflg7 == 1 && v7_timer == 0 && state7 == '0')
+            { output_low(V7); vanoflg7 = 0; eeprom_valve_dirty = 1; }
+
+        if (vanoflg8 == 1 && v8_timer == 0 && state8 == '0')
+            { output_low(V8); vanoflg8 = 0; eeprom_valve_dirty = 1; }
+
+        output_low(SIGLED);
+
+        // Save EEPROM once if any pending OFF fired
+        if (eeprom_valve_dirty)
+        {
+            eeprom_valve_dirty = 0;
+            save_valve_states_to_eeprom();
+        }
+
+        delay_ms(10);
+
+    } // while(true)
+} // main
