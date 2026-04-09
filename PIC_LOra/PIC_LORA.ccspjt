@@ -6,15 +6,15 @@ Compiler=PCH
 [Target Data]
 FileList=PIC_LORA.c
 [Directories]
-Include=C:\Program Files (x86)\PICC\Devices\;C:\Program Files (x86)\PICC\Drivers\
+Include=C:\Program Files (x86)\PICC\Devices\;C:\Program Files (x86)\PICC\Drivers\;C:\Program Files (x86)\PICC\Drivers\C:\Program Files (x86)\PICC\Devices\
 [PIC_LORA.c]
 Type=4
 [mru-list]
 1=PIC_LORA.c
 [Opened Files]
-1=..\..\..\ROOTS\PIC_ROOTS\RX_ROOTS\RX_Roots.c
-2=..\Lora_Rtos_Pic\lorawan_valve_timer_a.c
-3=PIC_LORA.c
+1=PIC_LORA.c
+2=..\..\13_VaLVE\13_Valve.c
+3=
 4=..\..\..\PIC_TEST_CODE\Test_code.c
 5=..\..\..\13_VaLVE\13_Valve.c
 6=..\..\..\DEENA\motor\motor_file.c

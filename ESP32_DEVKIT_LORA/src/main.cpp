@@ -151,7 +151,8 @@ void updateServerOptimistic(const String &sid,
     const String &a5, const String &a6,
     const String &a7, const String &a8);
 void updateServerFromAck(const String &sid);
-void sendLoraFrame(const LoraJob &job);
+void sendLoraFrame(const LoraJob &job, int count = 5);
+bool reReadAndUpdateJob(LoraJob &job);
 bool get_serial();                         // FIX A: returns bool, no sid param needed
 bool listenLoraAck(uint32_t timeoutMs);    // FIX B: returns bool
 void blinkLED(int times, int onMs, int offMs);
@@ -274,7 +275,6 @@ void updateServerFromAck(const String &sid) {
     a5=vack5; a6=vack6; a7=vack7; a8=vack8;
     xSemaphoreGive(xMutexVars);
 
-    // FIX C: safety — if all empty, don't overwrite optimistic update
     if (a1=="" && a2=="" && a3=="" && a4=="" &&
         a5=="" && a6=="" && a7=="" && a8=="") {
         Serial.printf("[ACK-UPDATE] Empty ACK for %s — skip POST\n", sid.c_str());
@@ -286,19 +286,33 @@ void updateServerFromAck(const String &sid) {
                  "&ack1=" + a1 + "&ack2=" + a2 + "&ack3=" + a3 + "&ack4=" + a4 +
                  "&ack5=" + a5 + "&ack6=" + a6 + "&ack7=" + a7 + "&ack8=" + a8;
 
-    HTTPClient http;
-    http.begin(url);
-    http.addHeader("Content-Type", "text/plain");
-    int code = http.POST("");
-    Serial.printf("[ACK-UPDATE] updateServer %s → %d\n", sid.c_str(), code);
-    http.end();
-}
+    // ── Retry up to 3 times with 500ms gap ──
+    int code = -1;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        HTTPClient http;
+        http.begin(url);
+        http.addHeader("Content-Type", "text/plain");
+        http.setTimeout(3000);  // 3 second timeout per attempt
+        code = http.POST("");
+        http.end();
 
+        Serial.printf("[ACK-UPDATE] updateServer %s → %d (attempt %d)\n",
+                      sid.c_str(), code, attempt);
+
+        if (code == 200) break;  // success — no need to retry
+
+        vTaskDelay(pdMS_TO_TICKS(500));  // wait 500ms before retry
+    }
+
+    if (code != 200) {
+        Serial.printf("[ACK-UPDATE] Failed after 3 attempts for %s\n", sid.c_str());
+    }
+}
 // ══════════════════════════════════════════════════════════
-//  sendLoraFrame() — unchanged
+//  sendLoraFrame() — now accepts 'count' (how many times to send)
 // ══════════════════════════════════════════════════════════
-void sendLoraFrame(const LoraJob &job) {
-    for (int k = 0; k < 5; k++) {
+void sendLoraFrame(const LoraJob &job, int count) {
+    for (int k = 0; k < count; k++) {
         Serial2.print(job.prefix);
         Serial2.print(job.v1); Serial2.print("*"); Serial2.print(job.s1); Serial2.print("*");
         Serial2.print(job.v2); Serial2.print("*"); Serial2.print(job.s2); Serial2.print("*");
@@ -310,14 +324,80 @@ void sendLoraFrame(const LoraJob &job) {
         Serial2.print(job.v8); Serial2.print("*"); Serial2.print(job.s8); Serial2.print("*");
         Serial2.print(job.bw); Serial2.print("*");
 
-        Serial.printf("[TX-%c] %d/5 → %s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*\n",
-                      job.prefix, k+1,
+        Serial.printf("[TX-%c] %d/%d → %s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*%s*\n",
+                      job.prefix, k+1, count,
                       job.v1,job.s1, job.v2,job.s2,
                       job.v3,job.s3, job.v4,job.s4,
                       job.v5,job.s5, job.v6,job.s6,
                       job.v7,job.s7, job.v8,job.s8, job.bw);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+}
+
+// ══════════════════════════════════════════════════════════
+//  reReadAndUpdateJob() — re-reads server mid-TX to pick up
+//  any valve changes made between the initial read and now.
+//  Returns true if the job was updated with fresh data.
+// ══════════════════════════════════════════════════════════
+bool reReadAndUpdateJob(LoraJob &job) {
+    String sidStr(job.sid);
+    String slaveId = "";
+    if      (sidStr == "A") slaveId = slaveid1;
+    else if (sidStr == "B") slaveId = slaveid2;
+    else if (sidStr == "C") slaveId = slaveid3;
+    else return false;
+
+    String url = HOST1 + "/Lorawan24/motorlora/readvalve8.php?deviceid=" +
+                 deviceid + "&tokenid=" + tokenid + "&sid=" + slaveId;
+
+    HTTPClient http;
+    http.begin(url);
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        Serial.printf("[RE-READ] HTTP err %d — keeping original data\n", code);
+        http.end();
+        return false;
+    }
+    String localPayload = http.getString();
+    http.end();
+
+    if (localPayload.length() == 0) {
+        Serial.println("[RE-READ] Empty payload — keeping original data");
+        return false;
+    }
+
+    xSemaphoreTake(xMutexVars, portMAX_DELAY);
+    payload = localPayload;
+    parsePayload();
+
+    // Update valve states (s1..s8) — these are what gets sent over LoRa
+    scopy(job.s1, 4, vs1); scopy(job.s2, 4, vs2);
+    scopy(job.s3, 4, vs3); scopy(job.s4, 4, vs4);
+    scopy(job.s5, 4, vs5); scopy(job.s6, 4, vs6);
+    scopy(job.s7, 4, vs7); scopy(job.s8, 4, vs8);
+
+    // Update valve identifiers (v1..v8)
+    scopy(job.v1, 4, v1); scopy(job.v2, 4, v2);
+    scopy(job.v3, 4, v3); scopy(job.v4, 4, v4);
+    scopy(job.v5, 4, v5); scopy(job.v6, 4, v6);
+    scopy(job.v7, 4, v7); scopy(job.v8, 4, v8);
+
+    // Update cmd fields — used by optimistic update
+    scopy(job.cmd1, 4, vs1); scopy(job.cmd2, 4, vs2);
+    scopy(job.cmd3, 4, vs3); scopy(job.cmd4, 4, vs4);
+    scopy(job.cmd5, 4, vs5); scopy(job.cmd6, 4, vs6);
+    scopy(job.cmd7, 4, vs7); scopy(job.cmd8, 4, vs8);
+
+    // Update backwash time
+    scopy(job.bw, 8, BWMIN);
+
+    Serial.printf("[RE-READ] Updated job %c: %s|%s|%s|%s|%s|%s|%s|%s BW:%s\n",
+        job.prefix,
+        vs1.c_str(), vs2.c_str(), vs3.c_str(), vs4.c_str(),
+        vs5.c_str(), vs6.c_str(), vs7.c_str(), vs8.c_str(), BWMIN.c_str());
+
+    xSemaphoreGive(xMutexVars);
+    return true;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -420,17 +500,24 @@ bool get_serial() {
 //    → overwrote optimistic update → app showed wrong state
 //
 //  New behaviour:
-//    If timeout → return false → TaskLoraTX skips updateServerFromAck()
-//    Optimistic update stays on server → app shows correct state
+//    Scans the FULL timeout window and keeps the LAST valid ACK.
+//    If the slave sends two ACKs (one from 1st batch, one from 2nd),
+//    the latest one wins — which has the most up-to-date valve state.
+//    If timeout with no ACK → return false → server NOT updated.
 // ══════════════════════════════════════════════════════════
 bool listenLoraAck(uint32_t timeoutMs) {
+    bool gotAny = false;
     uint32_t start = millis();
     while (millis() - start < timeoutMs) {
         if (Serial2.available()) {
             char b = Serial2.peek();
             if (b == '$') {
                 bool ok = get_serial();
-                if (ok) return true;
+                if (ok) {
+                    gotAny = true;
+                    Serial.println("[ACK] Valid ACK received — continuing to check for newer ACK...");
+                    // Don't return — keep scanning for a newer ACK
+                }
                 // bad frame — keep scanning until timeout
             } else {
                 Serial2.read();  // discard noise byte
@@ -438,16 +525,27 @@ bool listenLoraAck(uint32_t timeoutMs) {
         }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
-    Serial.println("[ACK] timeout — optimistic update kept");
-    return false;
+    if (!gotAny)
+        Serial.println("[ACK] timeout — no ACK received");
+    else
+        Serial.println("[ACK] Using last received ACK");
+    return gotAny;
 }
 
 // ══════════════════════════════════════════════════════════
 //  TaskLoraTX — ONLY task writing Serial2
 //
-//  CHANGE: listenLoraAck() now returns bool.
-//  updateServerFromAck() called ONLY when ACK actually received.
-//  Optimistic update is NOT touched on timeout.
+//  V5 FIX: Send 3 → re-read server → flush Serial2 → send 2
+//  This ensures any valve changes made between the initial
+//  read and the TX are captured in the final 2 sends.
+//
+//  ACK flow:
+//    - Flush Serial2 after re-read to discard stale ACK from
+//      first 3 sends (slave may have responded to old data)
+//    - Listen for ACK only after final 2 sends — this ACK
+//      reflects the ACTUAL physical valve state on the slave
+//    - updateServerFromAck() overwrites optimistic with real
+//      state only when a valid ACK is received
 // ══════════════════════════════════════════════════════════
 void TaskLoraTX(void *pvParameters) {
     LoraJob job;
@@ -462,41 +560,56 @@ void TaskLoraTX(void *pvParameters) {
                     Serial2.print(ka);
                     vTaskDelay(pdMS_TO_TICKS(100));
                 }
-                // No ACK wait for keepalive — unchanged
+                // No ACK wait for keepalive
             }
             else
             {
-                Serial.printf("[LORA-TX] Slave %c\n", job.prefix);
+                Serial.printf("[LORA-TX] Slave %c — Phase 1: send 3x (initial data)\n", job.prefix);
 
                 xSemaphoreTake(xMutexLED, portMAX_DELAY);
                 digitalWrite(SIG_PIN, HIGH);
                 xSemaphoreGive(xMutexLED);
 
-                // Step 1: Send LoRa frame — unchanged
-                sendLoraFrame(job);
+                // ── Phase 1: Send 3 times with original data ──
+                sendLoraFrame(job, 3);
 
-                // Step 2: Optimistic update immediately — unchanged
-                updateServerOptimistic(String(job.sid),
-                    String(job.cmd1), String(job.cmd2),
-                    String(job.cmd3), String(job.cmd4),
-                    String(job.cmd5), String(job.cmd6),
-                    String(job.cmd7), String(job.cmd8));
+                // ── Phase 2: Re-read server for latest valve states ──
+                Serial.printf("[LORA-TX] Slave %c — Re-reading server for latest data\n", job.prefix);
+                bool updated = reReadAndUpdateJob(job);
+                if (updated) {
+                    Serial.printf("[LORA-TX] Job updated with latest server data\n");
+                } else {
+                    Serial.printf("[LORA-TX] Re-read failed — continuing with original data\n");
+                }
+
+                // No Serial2 flush — ACK from first batch stays in buffer
+                // listenLoraAck will scan full window and keep the LAST valid ACK
+
+                // ── Phase 4: Send 2 more times with (possibly updated) data ──
+                Serial.printf("[LORA-TX] Slave %c — Phase 2: send 2x (latest data)\n", job.prefix);
+                sendLoraFrame(job, 2);
+
+                // No optimistic update — only update server from real ACK
 
                 xSemaphoreTake(xMutexLED, portMAX_DELAY);
                 digitalWrite(SIG_PIN, LOW);
                 xSemaphoreGive(xMutexLED);
 
-                // Step 3: Listen for real ACK
-                // FIX B: only call updateServerFromAck if ACK truly received
+                // ── Phase 5: Listen for ACK from last 2 sends ──
+                // This ACK reflects the ACTUAL valve state on the slave
+                // Server is ONLY updated when valve is confirmed ON/OFF
                 bool ackReceived = listenLoraAck(ACK_WINDOW_MS);
                 if (ackReceived) {
                     String sid;
                     xSemaphoreTake(xMutexVars, portMAX_DELAY);
                     sid = SID_g;
                     xSemaphoreGive(xMutexVars);
+                    // ACK updates server with real physical valve state
                     updateServerFromAck(sid);
+                    Serial.printf("[LORA-TX] ACK received for %c — server updated with actual valve state\n",
+                                  job.prefix);
                 } else {
-                    Serial.printf("[LORA-TX] No ACK for %c — optimistic update kept on server\n",
+                    Serial.printf("[LORA-TX] No ACK for %c — server NOT updated (valve state unknown)\n",
                                   job.prefix);
                 }
             }
@@ -689,8 +802,8 @@ void TaskReadServerB(void *pvParameters) {
 
         vB1=v1; vB2=v2; vB3=v3; vB4=v4;
         vB5=v5; vB6=v6; vB7=v7; vB8=v8;
-
-        if (v2s1!=v2s11||v2s2!=v2s22||v2s3!=v2s33||v2s4!=v2s44||
+ 
+       if (v2s1!=v2s11||v2s2!=v2s22||v2s3!=v2s33||v2s4!=v2s44||
             v2s5!=v2s55||v2s6!=v2s66||v2s7!=v2s77||v2s8!=v2s88||BWMIN2!=BW2MINN)
             changed = true;
 

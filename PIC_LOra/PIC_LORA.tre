@@ -1,5 +1,5 @@
 ÀÄPIC_LORA
-   ÃÄMAIN  0/674  Ram=1
+   ÃÄMAIN  0/802  Ram=1
    ³  ÃÄ@cinit1  (Inline)  Ram=0
    ³  ÃÄsetup_timer1_for_1s_interrupt  0/20  Ram=0
    ³  ÃÄload_valve_states_from_eeprom  0/954  Ram=9
@@ -26,11 +26,11 @@
    ³  ³  ÃÄis_valid_state  0/22  Ram=1
    ³  ³  ÃÄis_valid_state  0/22  Ram=1
    ³  ³  ÀÄ@PSTRINGCN_9600_31766_31767  0/32  Ram=3
-   ³  ÃÄparse_packet  0/1420  Ram=30
+   ³  ÃÄparse_packet  0/1172  Ram=30
    ³  ³  ÃÄstrtok  0/164  Ram=10
    ³  ³  ³  ÃÄstrspn  0/136  Ram=9
    ³  ³  ³  ÀÄstrpbrk  0/114  Ram=9
-   ³  ³  ÃÄ@goto12243  0/70  Ram=0
+   ³  ³  ÃÄ@goto12244  0/70  Ram=0
    ³  ³  ÃÄstrncpy  0/144  Ram=11
    ³  ³  ÃÄstrtok  0/164  Ram=10
    ³  ³  ³  ÀÄ*
@@ -40,7 +40,6 @@
    ³  ³  ³  ÀÄ@DIV88  0/40  Ram=3
    ³  ³  ÃÄ@PSTRINGCN_9600_31766_31767  0/32  Ram=3
    ³  ³  ÃÄ@PSTRINGC_9600_31766_31767  0/34  Ram=2
-   ³  ³  ÃÄ@PSTRINGCN_9600_31766_31767  0/32  Ram=3
    ³  ³  ÃÄis_valid_state  0/22  Ram=1
    ³  ³  ÃÄis_valid_state  0/22  Ram=1
    ³  ³  ÃÄis_valid_state  0/22  Ram=1
@@ -50,7 +49,6 @@
    ³  ³  ÃÄis_valid_state  0/22  Ram=1
    ³  ³  ÃÄis_valid_state  0/22  Ram=1
    ³  ³  ÃÄ@PSTRINGC_9600_31766_31767  0/34  Ram=2
-   ³  ³  ÃÄ@PSTRINGCN_9600_31766_31767  0/32  Ram=3
    ³  ³  ÃÄ@PSTRINGC_9600_31766_31767  0/34  Ram=2
    ³  ³  ÃÄ@PSTRINGCN_9600_31766_31767  0/32  Ram=3
    ³  ³  ÃÄ@PSTRINGCN_9600_31766_31767  0/32  Ram=3
@@ -74,7 +72,7 @@
    ³  ³  ÀÄ@PSTRINGC_9600_31766_31767  0/34  Ram=2
    ³  ÃÄsave_valve_states_to_eeprom  0/882  Ram=1
    ³  ³  ÀÄ*
-   ³  ÃÄtxvalve  0/322  Ram=1
+   ³  ÃÄtxvalve  0/330  Ram=1
    ³  ³  ÀÄ@delay_ms1  0/38  Ram=1
    ³  ÃÄsave_valve_states_to_eeprom  0/882  Ram=1
    ³  ³  ÀÄ*

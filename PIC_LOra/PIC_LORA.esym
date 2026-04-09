@@ -1,8 +1,7 @@
-C L "MAIN" 0 33 1 "FUNCTION"
-D G "__PCH__" 0 2332 ""5.015""
-D G "__DEVICE__" 0 2332 "2522"
-D G "__DATE__" 0 2332 ""31-Mar-26""
-D G "__TIME__" 0 2332 ""09:58:20"" "Standard Header file for the PIC18F25K22 device ////////////////"
+D G "__PCH__" 0 630 ""5.015""
+D G "__DEVICE__" 0 630 "2522"
+D G "__DATE__" 0 630 ""09-Apr-26""
+D G "__TIME__" 0 630 ""12:55:28"" "Standard Header file for the PIC18F25K22 device ////////////////"
 c L "set_tris_a" 1 3 6 "FUNCTION"
 v L "value" 1 45 "int8" `54 
 f B "set_tris_a" 1 45 "void(int8 value)" `53 
@@ -1458,16 +1457,16 @@ C L "write_int1_eeprom" 6 2 6 "FUNCTION"
 V L "address" 6 98 "int16" `968 
 V L "bitPosition" 6 98 "int8" `969 
 V L "data" 6 98 "int8" `970 
-F G "write_int1_eeprom" 6 99 "void(int16 address,int8 bitPosition,int8 data,int8 bitPosition,int8 data)" `967 
+F G "write_int1_eeprom" 6 99 "void(int16 address,int8 bitPosition,int8 data)" `967 
 V L "stored_data" 6 100 "int8" `971 
 C L "read_int1_eeprom" 6 2 4 "FUNCTION"
 V L "address" 6 121 "int16" `973 
 V L "bitPosition" 6 121 "int8" `974 
-F G "read_int1_eeprom" 6 122 "int8(int16 address,int8 bitPosition,int16 address,int8 read_int1_eeprom)" `972 
+F G "read_int1_eeprom" 6 122 "int8(int16 address,int8 bitPosition)" `972 
 C L "write_int16_eeprom" 6 2 4 "FUNCTION"
 V L "address" 6 131 "int16" `976 
 V L "data" 6 131 "int16" `977 
-F G "write_int16_eeprom" 6 132 "void(int16 address,int16 data,int16 address,int16 data)" `975 
+F G "write_int16_eeprom" 6 132 "void(int16 address,int16 data)" `975 
 V L "i" 6 136 "int8" `978 
 C L "read_int16_eeprom" 6 2 3 "FUNCTION"
 V L "address" 6 149 "int16" `980 
@@ -1477,7 +1476,7 @@ V L "data" 6 155 "int16" `982
 C L "write_int32_eeprom" 6 2 4 "FUNCTION"
 V L "address" 6 171 "int16" `984 
 V L "data" 6 171 "int32" `985 
-F G "write_int32_eeprom" 6 172 "void(int16 address,int32 data,int16 address,int32 data)" `983 
+F G "write_int32_eeprom" 6 172 "void(int16 address,int32 data)" `983 
 V L "i" 6 176 "int8" `986 
 C L "read_int32_eeprom" 6 2 3 "FUNCTION"
 V L "address" 6 187 "int16" `988 
@@ -1487,146 +1486,132 @@ V L "data" 6 193 "int32" `990
 C L "write_float_eeprom" 6 2 4 "FUNCTION"
 V L "address" 6 207 "int16" `992 
 V L "data" 6 207 "float" `993 
-F G "write_float_eeprom" 6 208 "void(int16 address,float data,int16 address,float data)" `991 
+F G "write_float_eeprom" 6 208 "void(int16 address,float data)" `991 
 V L "i" 6 212 "int8" `994 
 C L "read_float_eeprom" 6 2 3 "FUNCTION"
 V L "address" 6 223 "int16" `996 
 F G "read_float_eeprom" 6 224 "float(int16 address)" `995 
 V L "data" 6 225 "float" `997 
 V L "i" 6 232 "int8" `998 
-D G "V1" 0 16 "PIN_B0"
-D G "V2" 0 17 "PIN_B1"
-D G "V3" 0 18 "PIN_B2"
-D G "V4" 0 19 "PIN_B3"
-D G "V5" 0 20 "PIN_B4"
+D G "V1" 0 16 "PIN_B3"
+D G "V2" 0 17 "PIN_B2"
+D G "V3" 0 18 "PIN_B0"
+D G "V4" 0 19 "PIN_B1"
+D G "V5" 0 20 "PIN_B6"
 D G "V6" 0 21 "PIN_B5"
-D G "V7" 0 22 "PIN_B6"
-D G "V8" 0 23 "PIN_B7"
+D G "V7" 0 22 "PIN_B7"
+D G "V8" 0 23 "PIN_B4"
 D G "SIGLED" 0 24 "PIN_C3"
 D G "MY_ID" 0 29 "'A'"
-D G "VALVE_ON_DELAY_S" 0 36 "2"
-D G "EEPROM_MAGIC_ADDR" 0 63 "0x00"
-D G "EEPROM_MAGIC_VALUE" 0 64 "0xA5"
-D G "EEPROM_STATE_BASE" 0 65 "0x01"
-D G "EEPROM_FLAG_BASE" 0 66 "0x09"
-V G "state1" 0 79 "int8" `1003 
-V G "state2" 0 79 "int8" `1004 
-V G "state3" 0 79 "int8" `1005 
-V G "state4" 0 79 "int8" `1006 
-V G "state5" 0 80 "int8" `1007 
-V G "state6" 0 80 "int8" `1008 
-V G "state7" 0 80 "int8" `1009 
-V G "state8" 0 80 "int8" `1010 
-V G "vanoflg1" 0 84 "int1" `1011 
-V G "vanoflg2" 0 84 "int1" `1012 
-V G "vanoflg3" 0 84 "int1" `1013 
-V G "vanoflg4" 0 84 "int1" `1014 
-V G "vanoflg5" 0 85 "int1" `1015 
-V G "vanoflg6" 0 85 "int1" `1016 
-V G "vanoflg7" 0 85 "int1" `1017 
-V G "vanoflg8" 0 85 "int1" `1018 
-V G "eeprom_valve_dirty" 0 88 "int1" `1019 
-V G "v1_timer" 0 91 "int8" `1020 
-V G "v2_timer" 0 91 "int8" `1021 
-V G "v3_timer" 0 91 "int8" `1022 
-V G "v4_timer" 0 91 "int8" `1023 
-V G "v5_timer" 0 92 "int8" `1024 
-V G "v6_timer" 0 92 "int8" `1025 
-V G "v7_timer" 0 92 "int8" `1026 
-V G "v8_timer" 0 92 "int8" `1027 
-V G "RX_Command_Ready" 0 97 "int1" `1028 
-V G "RxBuffer" 0 98 "int8[60]" `1029 
-V G "TimeBuffer" 0 99 "int8[9]" `1030 
-V G "vno1" 0 100 "int8" `1031 
-V G "vno2" 0 100 "int8" `1032 
-V G "vno3" 0 100 "int8" `1033 
-V G "vno4" 0 100 "int8" `1034 
-V G "vno5" 0 100 "int8" `1035 
-V G "vno6" 0 100 "int8" `1036 
-V G "vno7" 0 100 "int8" `1037 
-V G "vno8" 0 100 "int8" `1038  "Timer1 / wall-clock variables"
-V G "overflow_count" 0 105 "int8" `1039 
-V G "sec" 0 106 "int8" `1040 
-V G "min" 0 106 "int8" `1041 
-V G "hr" 0 106 "int8" `1042 
-V G "bwminv1" 0 107 "int8" `1043 
-V G "bwminv2" 0 107 "int8" `1044 
-V G "eeprom_base_address" 0 108 "int16" `1045 
-V G "txflg" 0 109 "int1" `1046 
-C L "is_valid_state" 0 14 2 "FUNCTION"
-V L "c" 0 115 "int8" `1048 
-F G "is_valid_state" 0 116 "int8(int8 c)" `1047 
-C L "save_valve_states_to_eeprom" 0 14 2 "FUNCTION"
-F G "save_valve_states_to_eeprom" 0 125 "void()" `1049 
-C L "load_valve_states_from_eeprom" 0 14 2 "FUNCTION"
-F G "load_valve_states_from_eeprom" 0 163 "void()" `1053 
-V L "magic" 0 164 "int8" `1054 
+D G "VALVE_ON_DELAY_S" 0 34 "2"
+D G "EEPROM_MAGIC_ADDR" 0 39 "0x00"
+D G "EEPROM_MAGIC_VALUE" 0 40 "0xA5"
+D G "EEPROM_STATE_BASE" 0 41 "0x01"
+D G "EEPROM_FLAG_BASE" 0 42 "0x09"
+V G "state1" 0 55 "int8" `1003 
+V G "state2" 0 55 "int8" `1004 
+V G "state3" 0 55 "int8" `1005 
+V G "state4" 0 55 "int8" `1006 
+V G "state5" 0 56 "int8" `1007 
+V G "state6" 0 56 "int8" `1008 
+V G "state7" 0 56 "int8" `1009 
+V G "state8" 0 56 "int8" `1010 
+V G "vanoflg1" 0 59 "int1" `1011 
+V G "vanoflg2" 0 59 "int1" `1012 
+V G "vanoflg3" 0 59 "int1" `1013 
+V G "vanoflg4" 0 59 "int1" `1014 
+V G "vanoflg5" 0 60 "int1" `1015 
+V G "vanoflg6" 0 60 "int1" `1016 
+V G "vanoflg7" 0 60 "int1" `1017 
+V G "vanoflg8" 0 60 "int1" `1018 
+V G "eeprom_valve_dirty" 0 63 "int1" `1019 
+V G "v1_timer" 0 66 "int8" `1020 
+V G "v2_timer" 0 66 "int8" `1021 
+V G "v3_timer" 0 66 "int8" `1022 
+V G "v4_timer" 0 66 "int8" `1023 
+V G "v5_timer" 0 67 "int8" `1024 
+V G "v6_timer" 0 67 "int8" `1025 
+V G "v7_timer" 0 67 "int8" `1026 
+V G "v8_timer" 0 67 "int8" `1027 
+V G "RX_Command_Ready" 0 72 "int1" `1028 
+V G "RxBuffer" 0 73 "int8[60]" `1029 
+V G "TimeBuffer" 0 74 "int8[9]" `1030 
+V G "vno1" 0 75 "int8" `1031 
+V G "vno2" 0 75 "int8" `1032 
+V G "vno3" 0 75 "int8" `1033 
+V G "vno4" 0 75 "int8" `1034 
+V G "vno5" 0 75 "int8" `1035 
+V G "vno6" 0 75 "int8" `1036 
+V G "vno7" 0 75 "int8" `1037 
+V G "vno8" 0 75 "int8" `1038  "Timer1 / wall-clock variables"
+V G "overflow_count" 0 80 "int8" `1039 
+V G "sec" 0 81 "int8" `1040 
+V G "min" 0 81 "int8" `1041 
+V G "hr" 0 81 "int8" `1042 
+V G "bwminv1" 0 82 "int8" `1043 
+V G "bwminv2" 0 82 "int8" `1044 
+V G "eeprom_base_address" 0 83 "int16" `1045 
+V G "txflg" 0 84 "int1" `1046 
+C L "is_valid_state" 0 14 1 "FUNCTION"
+V L "c" 0 89 "int8" `1048 
+F G "is_valid_state" 0 90 "int8(int8 c)" `1047 
+C L "save_valve_states_to_eeprom" 0 14 1 "FUNCTION"
+F G "save_valve_states_to_eeprom" 0 98 "void()" `1049 
 C L "load_valve_states_from_eeprom" 0 14 1 "FUNCTION"
-V L "s1" 0 183 "int8" `1061 
-V L "s2" 0 184 "int8" `1062 
-V L "s3" 0 185 "int8" `1063 
-V L "s4" 0 186 "int8" `1064 
-V L "s5" 0 187 "int8" `1065 
-V L "s6" 0 188 "int8" `1066 
-V L "s7" 0 189 "int8" `1067 
-V L "s8" 0 190 "int8" `1068 
-C L "load_valve_states_from_eeprom" 0 14 1 "FUNCTION"
-C L "setup_timer1_for_1s_interrupt" 0 14 4 "FUNCTION"
-F G "setup_timer1_for_1s_interrupt" 0 231 "void()" `1070 
+F G "load_valve_states_from_eeprom" 0 135 "void()" `1053 
+V L "magic" 0 136 "int8" `1054 
+V L "s1" 0 154 "int8" `1061 
+V L "s2" 0 155 "int8" `1062 
+V L "s3" 0 156 "int8" `1063 
+V L "s4" 0 157 "int8" `1064 
+V L "s5" 0 158 "int8" `1065 
+V L "s6" 0 159 "int8" `1066 
+V L "s7" 0 160 "int8" `1067 
+V L "s8" 0 161 "int8" `1068 
+C L "setup_timer1_for_1s_interrupt" 0 14 1 "FUNCTION"
+F G "setup_timer1_for_1s_interrupt" 0 198 "void()" `1070 
 C L "timer1_isr" 0 14 1 "FUNCTION"
-F G "timer1_isr" 0 242 "void()" `1071 
-C L "timer1_isr" 0 14 1 "FUNCTION"
-C L "timer1_isr" 0 14 1 "FUNCTION"
-C L "timer1_isr" 0 14 1 "FUNCTION"
+F G "timer1_isr" 0 209 "void()" `1071 
 C L "store_byte" 0 14 1 "FUNCTION"
-V L "address" 0 281 "int16" `1073 
-V L "value" 0 281 "int8" `1074 
-F G "store_byte" 0 282 "void(int16 address,int8 value)" `1072 
-V L "address" 0 286 "int16" `1076 
-F G "retrieve_byte" 0 287 "int8(int16 address)" `1075 
-C L "RDA_isr" 0 14 6 "FUNCTION"
-F G "RDA_isr" 0 304 "void()" `1077 
-V L "first" 0 308 "int8" `1078 
+V L "address" 0 246 "int16" `1073 
+V L "value" 0 246 "int8" `1074 
+F G "store_byte" 0 247 "void(int16 address,int8 value)" `1072 
+V L "address" 0 251 "int16" `1076 
+F G "retrieve_byte" 0 252 "int8(int16 address)" `1075 
 C L "RDA_isr" 0 14 1 "FUNCTION"
-V L "idx" 0 311 "int8" `1079 
-V L "x" 0 312 "int8" `1080 
-C L "RDA_isr" 0 14 2 "FUNCTION"
-C L "RDA_isr" 0 14 1 "FUNCTION"
-C L "txvalve" 0 14 1 "FUNCTION"
-F G "txvalve" 0 332 "void()" `1081 
-V L "k" 0 333 "int8" `1082 
-C L "parse_packet" 0 14 4 "FUNCTION"
-F G "parse_packet" 0 362 "void(int8 ,int8 )" `1094 
-V L "ptr" 0 363 "*int8" `1095 
-V L "index" 0 364 "int8" `1096 
-V L "sep" 0 365 "int8[1]" `1097 
-V L "t_vno1" 0 367 "int8" `1098 
-V L "t_vno2" 0 367 "int8" `1099 
-V L "t_vno3" 0 367 "int8" `1100 
-V L "t_vno4" 0 367 "int8" `1101 
-V L "t_vno5" 0 367 "int8" `1102 
-V L "t_vno6" 0 367 "int8" `1103 
-V L "t_vno7" 0 367 "int8" `1104 
-V L "t_vno8" 0 367 "int8" `1105 
-V L "t_s1" 0 368 "int8" `1106 
-V L "t_s2" 0 368 "int8" `1107 
-V L "t_s3" 0 368 "int8" `1108 
-V L "t_s4" 0 368 "int8" `1109 
-V L "t_s5" 0 368 "int8" `1110 
-V L "t_s6" 0 368 "int8" `1111 
-V L "t_s7" 0 368 "int8" `1112 
-V L "t_s8" 0 368 "int8" `1113 
-V L "t_time" 0 369 "int8[9]" `1114 
+F G "RDA_isr" 0 262 "void()" `1077 
+V L "first" 0 266 "int8" `1078 
+V L "idx" 0 269 "int8" `1079 
+V L "x" 0 270 "int8" `1080 
+C L "txvalve" 0 14 2 "FUNCTION"
+F G "txvalve" 0 289 "void()" `1081 
+V L "k" 0 290 "int8" `1082 
 C L "parse_packet" 0 14 1 "FUNCTION"
-C L "parse_packet" 0 14 1 "FUNCTION"
-C L "parse_packet" 0 14 1 "FUNCTION"
-C L "parse_packet" 0 14 1 "FUNCTION"
+F G "parse_packet" 0 315 "void()" `1094 
+V L "ptr" 0 316 "*int8" `1095 
+V L "index" 0 317 "int8" `1096 
+V L "sep" 0 318 "int8[1]" `1097 
+V L "t_vno1" 0 320 "int8" `1098 
+V L "t_vno2" 0 320 "int8" `1099 
+V L "t_vno3" 0 320 "int8" `1100 
+V L "t_vno4" 0 320 "int8" `1101 
+V L "t_vno5" 0 320 "int8" `1102 
+V L "t_vno6" 0 320 "int8" `1103 
+V L "t_vno7" 0 320 "int8" `1104 
+V L "t_vno8" 0 320 "int8" `1105 
+V L "t_s1" 0 321 "int8" `1106 
+V L "t_s2" 0 321 "int8" `1107 
+V L "t_s3" 0 321 "int8" `1108 
+V L "t_s4" 0 321 "int8" `1109 
+V L "t_s5" 0 321 "int8" `1110 
+V L "t_s6" 0 321 "int8" `1111 
+V L "t_s7" 0 321 "int8" `1112 
+V L "t_s8" 0 321 "int8" `1113 
+V L "t_time" 0 322 "int8[9]" `1114 
 C L "MAIN" 0 14 1 "FUNCTION"
-F G "MAIN" 0 451 "void()" `1134 
+F G "MAIN" 0 396 "void()" `1132 
 C L "MAIN" 0 14 1 "FUNCTION"
-C L "MAIN" 0 14 1 "FUNCTION"
-C L "MAIN" 0 14 9 "FUNCTION"
-C L "MAIN" 0 14 1 "FUNCTION"
+C L "MAIN" 0 14 3 "FUNCTION"
 C L "MAIN" 0 14 1 "FUNCTION"
 C L "MAIN" 0 14 1 "FUNCTION"
 C L "MAIN" 0 14 1 "FUNCTION"
@@ -1635,8 +1620,9 @@ C L "MAIN" 0 14 1 "FUNCTION"
 C L "MAIN" 0 14 1 "FUNCTION"
 C L "MAIN" 0 14 1 "FUNCTION"
 C L "MAIN" 0 14 1 "FUNCTION"
-C L "MAIN" 0 14 5 "FUNCTION"
+C L "MAIN" 0 14 3 "FUNCTION"
 C L "MAIN" 0 14 1 "FUNCTION"
+C L "MAIN" 0 14 2 "FUNCTION"
 F B "reset_cpu" 0 0
 F B "abs" 1 0
 F B "sleep" 0 1

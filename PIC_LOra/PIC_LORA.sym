@@ -67,31 +67,31 @@
 07F     bwminv1
 080     bwminv2
 081-082 eeprom_base_address
+083-084 parse_packet.ptr
 083     txvalve.k
 083     load_valve_states_from_eeprom.magic
-083-084 parse_packet.ptr
 083     MAIN.@SCRATCH1
-084     load_valve_states_from_eeprom.s1
 084     @delay_ms1.P1
+084     load_valve_states_from_eeprom.s1
 085     load_valve_states_from_eeprom.s2
 085     parse_packet.index
-086-087 parse_packet.sep
 086     load_valve_states_from_eeprom.s3
+086-087 parse_packet.sep
 087     load_valve_states_from_eeprom.s4
-088     parse_packet.t_vno1
 088     load_valve_states_from_eeprom.s5
-089     load_valve_states_from_eeprom.s6
+088     parse_packet.t_vno1
 089     parse_packet.t_vno2
+089     load_valve_states_from_eeprom.s6
 08A     parse_packet.t_vno3
 08A     load_valve_states_from_eeprom.s7
-08B     load_valve_states_from_eeprom.s8
 08B     parse_packet.t_vno4
-08C     parse_packet.t_vno5
+08B     load_valve_states_from_eeprom.s8
 08C     @PRINTF_X_9600_31766_31767.P1
+08C     parse_packet.t_vno5
 08C     save_valve_states_to_eeprom.@SCRATCH1
 08C     load_valve_states_from_eeprom.@SCRATCH1
-08D     @PRINTF_X_9600_31766_31767.P1
 08D     parse_packet.t_vno6
+08D     @PRINTF_X_9600_31766_31767.P1
 08D     load_valve_states_from_eeprom.@SCRATCH2
 08E     parse_packet.t_vno7
 08E     load_valve_states_from_eeprom.@SCRATCH3
@@ -110,42 +110,42 @@
 096     parse_packet.t_s7
 097     parse_packet.t_s8
 098-0A0 parse_packet.t_time
+0A1     @PRINTF_D_9600_31766_31767.P1
 0A1-0A2 strncpy.s1
 0A1     @PSTRINGCN_9600_31766_31767.P1
 0A1-0A2 strtok.s1
 0A1     is_valid_state.c
-0A1     @PRINTF_D_9600_31766_31767.P1
 0A1     @PSTRINGC_9600_31766_31767.@SCRATCH1
 0A1     @PSTRINGR_9600_31766_31767.@SCRATCH1
 0A2     @PRINTF_D_9600_31766_31767.P1
 0A2     @PSTRINGC_9600_31766_31767.@SCRATCH2
 0A2     @PSTRINGCN_9600_31766_31767.@SCRATCH1
 0A2     @PSTRINGR_9600_31766_31767.@SCRATCH2
-0A3-0A4 strncpy.s2
 0A3-0A4 strtok.s2
+0A3-0A4 strncpy.s2
 0A3     @PSTRINGCN_9600_31766_31767.@SCRATCH2
 0A3     @PRINTF_D_9600_31766_31767.@SCRATCH1
 0A4     @PRINTF_D_9600_31766_31767.@SCRATCH2
-0A5-0A6 strtok.beg
 0A5-0A6 strncpy.n
+0A5-0A6 strtok.beg
 0A5     @PRINTF_D_9600_31766_31767.@SCRATCH3
 0A6     @PRINTF_D_9600_31766_31767.@SCRATCH4
-0A7     @DIV88.P1
-0A7-0A8 strncpy.s
 0A7-0A8 strtok.end
+0A7-0A8 strncpy.s
+0A7     @DIV88.P1
 0A8     @DIV88.P1
-0A9-0AA strpbrk.s1
 0A9-0AA strspn.s1
+0A9-0AA strpbrk.s1
 0A9     strncpy.@SCRATCH1
 0A9     strtok.@SCRATCH1
 0A9     @DIV88.@SCRATCH1
 0AA     strncpy.@SCRATCH2
 0AA     strtok.@SCRATCH2
-0AB-0AC strpbrk.s2
 0AB-0AC strspn.s2
+0AB-0AC strpbrk.s2
 0AB     strncpy.@SCRATCH3
-0AD-0AE strspn.sc1
 0AD-0AE strpbrk.sc1
+0AD-0AE strspn.sc1
 0AF-0B0 strspn.sc2
 0AF-0B0 strpbrk.sc2
 0B1     strpbrk.@SCRATCH1
@@ -166,8 +166,8 @@ F59     CCP_4_HIGH
 F5E     CCP_3
 F5E     CCP_3_LOW
 F5F     CCP_3_HIGH
-F67     CCP_2
 F67     CCP_2_LOW
+F67     CCP_2
 F68     CCP_2_HIGH
 F78.6   C2OUT
 F79.6   C1OUT
@@ -178,12 +178,12 @@ FAB.4   CREN
 FBE     CCP_1_LOW
 FBE     CCP_1
 FBF     CCP_1_HIGH
-FE1-FE2 @WRITE_PACKED_MEMORY.P1
-FE1-FE2 @READ_PACKED_MEMORY.P2
-FE9-FEA @READ_PACKED_MEMORY.P1
-FE9-FEA @WRITE_PROGRAM_MEMORY.P2
-FE9-FEA @WRITE_PACKED_MEMORY.P3
-FE9-FEA @READ_PROGRAM_MEMORY.P4
+FE1-FE2 @READ_PACKED_MEMORY.P1
+FE1-FE2 @WRITE_PACKED_MEMORY.P2
+FE9-FEA @READ_PROGRAM_MEMORY.P1
+FE9-FEA @WRITE_PACKED_MEMORY.P2
+FE9-FEA @READ_PACKED_MEMORY.P3
+FE9-FEA @WRITE_PROGRAM_MEMORY.P4
 FF6-FF8 @WRITE_PROGRAM_MEMORY.P1
 FF6-FF8 @READ_PROGRAM_MEMORY.P2
 
@@ -197,51 +197,49 @@ ROM Allocation:
 0002B0  @const1116.call
 0002DE  @const1123.call
 000308  @const1124.call
-00032A  @const1125.call
-000352  @const1126.call
-000370  @const1127.call
-00038A  @const1128.call
-000398  @const1129.call
-0003A6  @const1131.call
-0003D8  @const1132.call
-00040A  @const1133.call
-000422  setup_timer1_for_1s_interrupt
-000436  @PSTRINGCN_9600_31766_31767
-000456  @PRINTF_X_9600_31766_31767
-00049A  is_valid_state
-0004B0  @PSTRINGC_9600_31766_31767
-0004D2  save_valve_states_to_eeprom
-000844  load_valve_states_from_eeprom
-000BFE  strspn
-000C86  strpbrk
-000CF8  strtok
-000D9C  strncpy
-000E2C  @DIV88
-000E54  @PRINTF_D_9600_31766_31767
-000F08  @PSTRINGR_9600_31766_31767
-000F30  parse_packet
-0014BC  @goto12243
-001502  @delay_ms1
-001528  txvalve
-00166A  MAIN
-00166A  @cinit1
-0016E0  @cinit2
+000330  @const1125.call
+00034A  @const1126.call
+000358  @const1127.call
+000366  @const1129.call
+000398  @const1130.call
+0003CA  @const1131.call
+0003E2  setup_timer1_for_1s_interrupt
+0003F6  @PSTRINGCN_9600_31766_31767
+000416  @PRINTF_X_9600_31766_31767
+00045A  is_valid_state
+000470  @PSTRINGC_9600_31766_31767
+000492  save_valve_states_to_eeprom
+000804  load_valve_states_from_eeprom
+000BBE  strspn
+000C46  strpbrk
+000CB8  strtok
+000D5C  strncpy
+000DEC  @DIV88
+000E14  @PRINTF_D_9600_31766_31767
+000EC8  @PSTRINGR_9600_31766_31767
+000EF0  parse_packet
+001384  @goto12244
+0013CA  @delay_ms1
+0013F0  txvalve
+00153A  MAIN
+00153A  @cinit1
+0015B0  @cinit2
 0136  StrtoulGO
 0136  StrtolGO
 
 Project Directory:
-    C:\PIC_LORA_PROTEUS\PIC\PIC_LOra\
+    C:\Working_ESp32_Devkit_LORA_Freertos\PIC_LOra\
 
 Project Files:
-    PIC_LORA.c                                              [26-Mar-26 13:36  CRC=7E495171]
-    ..\..\..\Program Files (x86)\PICC\Devices\18F25K22.h    [12-Nov-13 14:35  CRC=C9966415]
-    ..\..\..\Program Files (x86)\PICC\Drivers\stdlib.h      [08-Jun-11 14:39  CRC=0B6669CF]
-    ..\..\..\Program Files (x86)\PICC\Drivers\stddef.h      [16-Jul-10 09:27  CRC=897CEC6C]
-    ..\..\..\Program Files (x86)\PICC\Drivers\string.h      [14-Jul-11 10:13  CRC=23EDEC8F]
-    ..\..\..\Program Files (x86)\PICC\Drivers\ctype.h       [03-Jan-08 13:55  CRC=2D1F019F]
-    ..\..\..\Program Files (x86)\PICC\Drivers\internal_eeprom.c [24-Aug-12 16:54  CRC=D75DC435]
+    PIC_LORA.c                                              [09-Apr-26 12:55  CRC=EF19A952]
+    ..\..\Program Files (x86)\PICC\Devices\18F25K22.h       [12-Nov-13 14:35  CRC=C9966415]
+    ..\..\Program Files (x86)\PICC\Drivers\stdlib.h         [08-Jun-11 14:39  CRC=0B6669CF]
+    ..\..\Program Files (x86)\PICC\Drivers\stddef.h         [16-Jul-10 09:27  CRC=897CEC6C]
+    ..\..\Program Files (x86)\PICC\Drivers\string.h         [14-Jul-11 10:13  CRC=23EDEC8F]
+    ..\..\Program Files (x86)\PICC\Drivers\ctype.h          [03-Jan-08 13:55  CRC=2D1F019F]
+    ..\..\Program Files (x86)\PICC\Drivers\internal_eeprom.c [24-Aug-12 16:54  CRC=D75DC435]
 
-Source signature=DC8B8259
+Source signature=4D5BDA3A
 
 Units:
     PIC_LORA (main)
