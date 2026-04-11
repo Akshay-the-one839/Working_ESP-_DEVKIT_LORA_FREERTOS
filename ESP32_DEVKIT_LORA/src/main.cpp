@@ -26,8 +26,8 @@
  *  EVERYTHING ELSE IS IDENTICAL TO V4
  *  ─────────────────────────────────────────────────────────
  *  - Optimistic update (updateServerOptimistic) unchanged
- *  - TaskCompareA/B/C unchanged
- *  - TaskReadServerA/B/C unchanged
+ *  - TaskCompareA/B/C/D/E unchanged
+ *  - TaskReadServerA/B/C/D/E unchanged
  *  - pushValveJob / pushKeepaliveJob unchanged
  *  - All timing defines unchanged
  *  - Queue depth 12 unchanged
@@ -102,15 +102,19 @@ Preferences  preferences;
 
 char device_id[20]={0}, token_id[20]={0};
 char slave_id1[20]={0}, slave_id2[20]={0}, slave_id3[20]={0};
+char slave_id4[20]={0}, slave_id5[20]={0};
 
 String deviceid="", tokenid="";
 String slaveid1="", slaveid2="", slaveid3="";
+String slaveid4="", slaveid5="";
 
 WiFiManagerParameter custom_device_id("device_id","Device ID", device_id,20);
 WiFiManagerParameter custom_token_id ("token_id", "Token ID",  token_id, 20);
 WiFiManagerParameter custom_slave_id1("slave_id1","Slave ID 1",slave_id1,20);
 WiFiManagerParameter custom_slave_id2("slave_id2","Slave ID 2",slave_id2,20);
 WiFiManagerParameter custom_slave_id3("slave_id3","Slave ID 3",slave_id3,20);
+WiFiManagerParameter custom_slave_id4("slave_id4","Slave ID 4",slave_id4,20);
+WiFiManagerParameter custom_slave_id5("slave_id5","Slave ID 5",slave_id5,20);
 
 // ─── Shared payload parse variables ───────────────────────
 String v1,v2,v3,v4,v5,v6,v7,v8;
@@ -120,6 +124,8 @@ String BWHR,BWMIN,BWSEC,TR,payload;
 String vA1,vA2,vA3,vA4,vA5,vA6,vA7,vA8;
 String vB1,vB2,vB3,vB4,vB5,vB6,vB7,vB8;
 String vC1,vC2,vC3,vC4,vC5,vC6,vC7,vC8;
+String vD1,vD2,vD3,vD4,vD5,vD6,vD7,vD8;
+String vE1,vE2,vE3,vE4,vE5,vE6,vE7,vE8;
 
 // Previous-state cache — slave A
 String v1s1,v1s2,v1s3,v1s4,v1s5,v1s6,v1s7,v1s8,BWMIN1;
@@ -132,6 +138,14 @@ String v2s11,v2s22,v2s33,v2s44,v2s55,v2s66,v2s77,v2s88,BW2MINN;
 // Previous-state cache — slave C
 String v3s1,v3s2,v3s3,v3s4,v3s5,v3s6,v3s7,v3s8,BWMIN3;
 String v3s11,v3s22,v3s33,v3s44,v3s55,v3s66,v3s77,v3s88,BW3MINN;
+
+// Previous-state cache — slave D
+String v4s1,v4s2,v4s3,v4s4,v4s5,v4s6,v4s7,v4s8,BWMIN4;
+String v4s11,v4s22,v4s33,v4s44,v4s55,v4s66,v4s77,v4s88,BW4MINN;
+
+// Previous-state cache — slave E
+String v5s1,v5s2,v5s3,v5s4,v5s5,v5s6,v5s7,v5s8,BWMIN5;
+String v5s11,v5s22,v5s33,v5s44,v5s55,v5s66,v5s77,v5s88,BW5MINN;
 
 // ACK variables
 String vack1,vack2,vack3,vack4,vack5,vack6,vack7,vack8;
@@ -243,6 +257,8 @@ void updateServerOptimistic(const String &sid,
     if      (sid == "A") useSid = slaveid1;
     else if (sid == "B") useSid = slaveid2;
     else if (sid == "C") useSid = slaveid3;
+    else if (sid == "D") useSid = slaveid4;
+    else if (sid == "E") useSid = slaveid5;
     else return;
 
     String url = HOST1 + "/Lorawan24/motorlora/v_update.php?deviceid=" + deviceid +
@@ -267,6 +283,8 @@ void updateServerFromAck(const String &sid) {
     if      (sid == "A") useSid = slaveid1;
     else if (sid == "B") useSid = slaveid2;
     else if (sid == "C") useSid = slaveid3;
+    else if (sid == "D") useSid = slaveid4;
+    else if (sid == "E") useSid = slaveid5;
     else return;
 
     String a1,a2,a3,a4,a5,a6,a7,a8;
@@ -345,6 +363,8 @@ bool reReadAndUpdateJob(LoraJob &job) {
     if      (sidStr == "A") slaveId = slaveid1;
     else if (sidStr == "B") slaveId = slaveid2;
     else if (sidStr == "C") slaveId = slaveid3;
+    else if (sidStr == "D") slaveId = slaveid4;
+    else if (sidStr == "E") slaveId = slaveid5;
     else return false;
 
     String url = HOST1 + "/Lorawan24/motorlora/readvalve8.php?deviceid=" +
@@ -456,7 +476,7 @@ bool get_serial() {
     }
 
     String parsedSid = parts[0].substring(1, 2);
-    if (parsedSid != "A" && parsedSid != "B" && parsedSid != "C") {
+    if (parsedSid != "A" && parsedSid != "B" && parsedSid != "C" && parsedSid != "D" && parsedSid != "E") {
         Serial.printf("[ACK] unknown SID '%s'\n", parsedSid.c_str());
         return false;
     }
@@ -916,7 +936,163 @@ void TaskReadServerC(void *pvParameters) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  TaskCompareA/B/C — unchanged
+//  TaskReadServerD
+// ══════════════════════════════════════════════════════════
+void TaskReadServerD(void *pvParameters) {
+    waitWiFiReady();
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    uint32_t lastKeepalive = 0;
+
+    for (;;) {
+        if (slaveid4.length()==0) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+
+        String localPayload = "";
+        {
+            String url = HOST1 + "/Lorawan24/motorlora/readvalve8.php?deviceid=" +
+                         deviceid + "&tokenid=" + tokenid + "&sid=" + slaveid4;
+            HTTPClient http;
+            http.begin(url);
+            int code = http.GET();
+            if (code == HTTP_CODE_OK) {
+                localPayload = http.getString();
+                Serial.printf("[SERVER-D] %s\n", localPayload.c_str());
+            } else {
+                Serial.printf("[SERVER-D] ERR %d\n", code);
+            }
+            http.end();
+        }
+
+        if (localPayload.length()==0) { vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS)); continue; }
+
+        bool changed = false;
+        String ls1,ls2,ls3,ls4,ls5,ls6,ls7,ls8,lbw;
+        String lv1,lv2,lv3,lv4,lv5,lv6,lv7,lv8;
+
+        xSemaphoreTake(xMutexVars, portMAX_DELAY);
+        payload = localPayload;
+        parsePayload();
+
+        v4s1=vs1; v4s2=vs2; v4s3=vs3; v4s4=vs4;
+        v4s5=vs5; v4s6=vs6; v4s7=vs7; v4s8=vs8;
+        BWMIN4 = BWMIN;
+
+        vD1=v1; vD2=v2; vD3=v3; vD4=v4;
+        vD5=v5; vD6=v6; vD7=v7; vD8=v8;
+
+        if (v4s1!=v4s11||v4s2!=v4s22||v4s3!=v4s33||v4s4!=v4s44||
+            v4s5!=v4s55||v4s6!=v4s66||v4s7!=v4s77||v4s8!=v4s88||BWMIN4!=BW4MINN)
+            changed = true;
+
+        ls1=v4s1; ls2=v4s2; ls3=v4s3; ls4=v4s4;
+        ls5=v4s5; ls6=v4s6; ls7=v4s7; ls8=v4s8; lbw=BWMIN4;
+        lv1=vD1; lv2=vD2; lv3=vD3; lv4=vD4;
+        lv5=vD5; lv6=vD6; lv7=vD7; lv8=vD8;
+
+        if (changed) {
+            v4s11=v4s1; v4s22=v4s2; v4s33=v4s3; v4s44=v4s4;
+            v4s55=v4s5; v4s66=v4s6; v4s77=v4s7; v4s88=v4s8;
+            BW4MINN=BWMIN4;
+        }
+        xSemaphoreGive(xMutexVars);
+
+        if (changed) {
+            pushValveJob('D',"D",ls1,ls2,ls3,ls4,ls5,ls6,ls7,ls8,lbw,
+                         lv1,lv2,lv3,lv4,lv5,lv6,lv7,lv8);
+        } else {
+            uint32_t now = millis();
+            if (now-lastKeepalive >= KEEPALIVE_INTERVAL_MS) {
+                lastKeepalive = now;
+                pushKeepaliveJob('D');
+            }
+        }
+
+        if (changed)
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        else
+            vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+//  TaskReadServerE
+// ══════════════════════════════════════════════════════════
+void TaskReadServerE(void *pvParameters) {
+    waitWiFiReady();
+    vTaskDelay(pdMS_TO_TICKS(4000));
+    uint32_t lastKeepalive = 0;
+
+    for (;;) {
+        if (slaveid5.length()==0) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+
+        String localPayload = "";
+        {
+            String url = HOST1 + "/Lorawan24/motorlora/readvalve8.php?deviceid=" +
+                         deviceid + "&tokenid=" + tokenid + "&sid=" + slaveid5;
+            HTTPClient http;
+            http.begin(url);
+            int code = http.GET();
+            if (code == HTTP_CODE_OK) {
+                localPayload = http.getString();
+                Serial.printf("[SERVER-E] %s\n", localPayload.c_str());
+            } else {
+                Serial.printf("[SERVER-E] ERR %d\n", code);
+            }
+            http.end();
+        }
+
+        if (localPayload.length()==0) { vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS)); continue; }
+
+        bool changed = false;
+        String ls1,ls2,ls3,ls4,ls5,ls6,ls7,ls8,lbw;
+        String lv1,lv2,lv3,lv4,lv5,lv6,lv7,lv8;
+
+        xSemaphoreTake(xMutexVars, portMAX_DELAY);
+        payload = localPayload;
+        parsePayload();
+
+        v5s1=vs1; v5s2=vs2; v5s3=vs3; v5s4=vs4;
+        v5s5=vs5; v5s6=vs6; v5s7=vs7; v5s8=vs8;
+        BWMIN5 = BWMIN;
+
+        vE1=v1; vE2=v2; vE3=v3; vE4=v4;
+        vE5=v5; vE6=v6; vE7=v7; vE8=v8;
+
+        if (v5s1!=v5s11||v5s2!=v5s22||v5s3!=v5s33||v5s4!=v5s44||
+            v5s5!=v5s55||v5s6!=v5s66||v5s7!=v5s77||v5s8!=v5s88||BWMIN5!=BW5MINN)
+            changed = true;
+
+        ls1=v5s1; ls2=v5s2; ls3=v5s3; ls4=v5s4;
+        ls5=v5s5; ls6=v5s6; ls7=v5s7; ls8=v5s8; lbw=BWMIN5;
+        lv1=vE1; lv2=vE2; lv3=vE3; lv4=vE4;
+        lv5=vE5; lv6=vE6; lv7=vE7; lv8=vE8;
+
+        if (changed) {
+            v5s11=v5s1; v5s22=v5s2; v5s33=v5s3; v5s44=v5s4;
+            v5s55=v5s5; v5s66=v5s6; v5s77=v5s7; v5s88=v5s8;
+            BW5MINN=BWMIN5;
+        }
+        xSemaphoreGive(xMutexVars);
+
+        if (changed) {
+            pushValveJob('E',"E",ls1,ls2,ls3,ls4,ls5,ls6,ls7,ls8,lbw,
+                         lv1,lv2,lv3,lv4,lv5,lv6,lv7,lv8);
+        } else {
+            uint32_t now = millis();
+            if (now-lastKeepalive >= KEEPALIVE_INTERVAL_MS) {
+                lastKeepalive = now;
+                pushKeepaliveJob('E');
+            }
+        }
+
+        if (changed)
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        else
+            vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+//  TaskCompareA/B/C/D/E
 // ══════════════════════════════════════════════════════════
 void TaskCompareA(void *pvParameters) {
     waitWiFiReady();
@@ -929,6 +1105,14 @@ void TaskCompareB(void *pvParameters) {
 void TaskCompareC(void *pvParameters) {
     waitWiFiReady();
     for (;;) { if (slaveid3.length()>0) compareid(slaveid3); vTaskDelay(pdMS_TO_TICKS(COMPAREID_INTERVAL_MS)); }
+}
+void TaskCompareD(void *pvParameters) {
+    waitWiFiReady();
+    for (;;) { if (slaveid4.length()>0) compareid(slaveid4); vTaskDelay(pdMS_TO_TICKS(COMPAREID_INTERVAL_MS)); }
+}
+void TaskCompareE(void *pvParameters) {
+    waitWiFiReady();
+    for (;;) { if (slaveid5.length()>0) compareid(slaveid5); vTaskDelay(pdMS_TO_TICKS(COMPAREID_INTERVAL_MS)); }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -990,6 +1174,8 @@ void saveParameters() {
     preferences.putString("slave_id1",custom_slave_id1.getValue());
     preferences.putString("slave_id2",custom_slave_id2.getValue());
     preferences.putString("slave_id3",custom_slave_id3.getValue());
+    preferences.putString("slave_id4",custom_slave_id4.getValue());
+    preferences.putString("slave_id5",custom_slave_id5.getValue());
     preferences.end();
 }
 void loadParameters() {
@@ -1008,6 +1194,8 @@ void loadParameters() {
     loadStr("slave_id1",slave_id1,20,custom_slave_id1,slaveid1);
     loadStr("slave_id2",slave_id2,20,custom_slave_id2,slaveid2);
     loadStr("slave_id3",slave_id3,20,custom_slave_id3,slaveid3);
+    loadStr("slave_id4",slave_id4,20,custom_slave_id4,slaveid4);
+    loadStr("slave_id5",slave_id5,20,custom_slave_id5,slaveid5);
     preferences.end();
 }
 void eraseParameters() {
@@ -1053,6 +1241,8 @@ void setup() {
     wm.addParameter(&custom_slave_id1);
     wm.addParameter(&custom_slave_id2);
     wm.addParameter(&custom_slave_id3);
+    wm.addParameter(&custom_slave_id4);
+    wm.addParameter(&custom_slave_id5);
     wm.setSaveConfigCallback(saveConfigCallback);
     loadParameters();
     checkButton();
@@ -1066,9 +1256,13 @@ void setup() {
     xTaskCreatePinnedToCore(TaskReadServerA, "SlaveA",    12288, NULL, 2, NULL, 0);
     xTaskCreatePinnedToCore(TaskReadServerB, "SlaveB",    12288, NULL, 2, NULL, 0);
     xTaskCreatePinnedToCore(TaskReadServerC, "SlaveC",    12288, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(TaskReadServerD, "SlaveD",    12288, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(TaskReadServerE, "SlaveE",    12288, NULL, 2, NULL, 0);
     xTaskCreatePinnedToCore(TaskCompareA,    "CompareA",  4096,  NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(TaskCompareB,    "CompareB",  4096,  NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(TaskCompareC,    "CompareC",  4096,  NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(TaskCompareD,    "CompareD",  4096,  NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(TaskCompareE,    "CompareE",  4096,  NULL, 1, NULL, 0);
 
     Serial.println("[SETUP] All tasks created.");
 }

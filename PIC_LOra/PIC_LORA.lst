@@ -1,4 +1,4 @@
-CCS PCH C Compiler, Version 5.015, 5967               09-Apr-26 12:55
+CCS PCH C Compiler, Version 5.015, 5967               09-Apr-26 15:25
 
                Filename:   C:\Working_ESp32_Devkit_LORA_Freertos\PIC_LOra\PIC_LORA.lst
 
@@ -2997,7 +2997,7 @@ CCS PCH C Compiler, Version 5.015, 5967               09-Apr-26 12:55
 .................... // ------------------------------------------------------------------ 
 .................... // Slave ID — change per board: 'A', 'B', 'C' ... 
 .................... // ------------------------------------------------------------------ 
-.................... #define MY_ID  'A' 
+.................... #define MY_ID  'C' 
 ....................  
 .................... // ------------------------------------------------------------------ 
 .................... // VALVE ON DELAY (seconds) 
@@ -4247,7 +4247,7 @@ CCS PCH C Compiler, Version 5.015, 5967               09-Apr-26 12:55
 0258:  MOVFF  FAE,B2
 ....................     if (first != MY_ID) return; 
 025C:  MOVF   xB2,W
-025E:  SUBLW  41
+025E:  SUBLW  43
 0260:  BTFSS  FD8.2
 0262:  BRA    02AA
 ....................  
@@ -4325,7 +4325,7 @@ CCS PCH C Compiler, Version 5.015, 5967               09-Apr-26 12:55
 1402:  BRA    1400
 1404:  MOVWF  FAD
 ....................         fprintf(COM_1, "%c*", MY_ID); 
-1406:  MOVLW  41
+1406:  MOVLW  43
 1408:  BTFSS  F9E.4
 140A:  BRA    1408
 140C:  MOVWF  FAD
@@ -4810,7 +4810,7 @@ CCS PCH C Compiler, Version 5.015, 5967               09-Apr-26 12:55
 118C:  MOVLW  09
 118E:  MOVWF  xA1
 1190:  CALL   03F6
-1194:  MOVLW  41
+1194:  MOVLW  43
 1196:  BTFSS  F9E.4
 1198:  BRA    1196
 119A:  MOVWF  FAD
